@@ -13,6 +13,7 @@ from app.models.profile import Profile
 from app.models.news import News
 from app.models.favorite import Favorite
 from app.models.collection import Collection
+from app.models.collection_item import CollectionItem
 
 load_dotenv()
 
