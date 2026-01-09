@@ -84,13 +84,29 @@ async def login_user(user: LoginSchema):
         firebase_user = auth.get_user_by_email(email)
         # Update last login time
         db.collection("users").document(firebase_user.uid).update({
-            "last_login": datetime.now(timezone.utc)
+            "lasted_login": datetime.now(timezone.utc)
         })
         return {
             "message": "Login successful",
             "user_id": firebase_user.uid,
             "id_token": user_cred["idToken"],   # Return the ID token for client-side use
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
+@router.get("/users/{user_id}", response_model=UserSchema)
+async def get_user_profile(user_id: str):
+    """Get user profile by user ID"""
+    try:
+        user_doc = db.collection("users").document(user_id).get()
+        if not user_doc.exists:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user_data = user_doc.to_dict()
+        return UserSchema(**user_data)
+
     except HTTPException:
         raise
     except Exception as e:
