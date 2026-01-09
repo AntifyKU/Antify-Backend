@@ -138,3 +138,14 @@ async def update_user_profile(user_id: str, user: UserSchema):
                             content={"message": "User profile updated successfully"})
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error") from e
+
+@router.get("/users/")
+async def list_all_users():
+    """List all users"""
+    try:
+        users_ref = db.collection("users")
+        docs = users_ref.stream()
+        users = [UserSchema(**doc.to_dict()) for doc in docs]
+        return users
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error") from e

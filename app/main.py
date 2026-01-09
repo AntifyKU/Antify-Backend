@@ -31,4 +31,4 @@ async def health_check():
     return {"status": "healthy"}
 
 BASE_URL = "/api"
-app.include_router(user_router.router, prefix=BASE_URL)
+app.include_router(user_router.router, prefix=BASE_URL, tags=["User Management"])
