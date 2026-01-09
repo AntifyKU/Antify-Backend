@@ -100,14 +100,29 @@ async def login_user(user: LoginSchema):
 async def get_user_profile(user_id: str):
     """Get user profile by user ID"""
     try:
+        # Fetch user document from Firestore
         user_doc = db.collection("users").document(user_id).get()
         if not user_doc.exists:
             raise HTTPException(status_code=404, detail="User not found")
-
+        # Convert Firestore document to UserSchema
         user_data = user_doc.to_dict()
         return UserSchema(**user_data)
-
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
+@router.delete("/users/{user_id}")
+async def delete_user_account(user_id: str):
+    """Delete user account by user ID"""
+    try:
+        # Delete user from Firebase Authentication
+        auth.delete_user(user_id)
+        # Delete user document from Firestore
+        db.collection("users").document(user_id).delete()
+        return JSONResponse(status_code=200,
+                            content={"message": "User account deleted successfully"})
+    except auth.UserNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="User not found") from exc
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error") from e
