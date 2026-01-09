@@ -19,6 +19,19 @@ class SignUpSchema(BaseModel):
             }
         }
 
+class LoginSchema(BaseModel):
+    """User login schema"""
+    username_or_email: str
+    password: str
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "username_or_email": "johndoe",
+                "password": "strongpassword123"
+            }
+        }
 
 class UserSchema(BaseModel):
     """User schema"""
@@ -29,6 +42,7 @@ class UserSchema(BaseModel):
     profile_picture: Optional[str] = None
     is_active: bool = True
     created_at: datetime
+    lasted_login: Optional[datetime] = None
     preferences: Dict[str, object] = {
         "language": "english",
         "theme": "light",
@@ -46,6 +60,7 @@ class UserSchema(BaseModel):
                 "profile_picture": None,
                 "is_active": True,
                 "created_at": "2026-01-07T10:00:00",
+                "lasted_login": "2026-01-10T15:30:00",
                 "preferences": {
                     "language": "english",
                     "theme": "light",
