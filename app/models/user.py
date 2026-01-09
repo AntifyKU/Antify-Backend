@@ -43,6 +43,7 @@ class UserSchema(BaseModel):
     is_active: bool = True
     created_at: datetime
     lasted_login: Optional[datetime] = None
+    lasted_update: Optional[datetime] = None
     preferences: Dict[str, object] = {
         "language": "english",
         "theme": "light",
@@ -61,6 +62,7 @@ class UserSchema(BaseModel):
                 "is_active": True,
                 "created_at": "2026-01-07T10:00:00",
                 "lasted_login": "2026-01-10T15:30:00",
+                "lasted_update": "2026-01-15T12:45:00",
                 "preferences": {
                     "language": "english",
                     "theme": "light",

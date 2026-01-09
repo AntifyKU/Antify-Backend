@@ -126,3 +126,15 @@ async def delete_user_account(user_id: str):
         raise HTTPException(status_code=404, detail="User not found") from exc
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error") from e
+
+@router.put("/users/{user_id}")
+async def update_user_profile(user_id: str, user: UserSchema):
+    """Update user profile by user ID"""
+    try:
+        # Update user document in Firestore and set lasted_update time
+        user.lasted_update = datetime.now(timezone.utc)
+        db.collection("users").document(user_id).update(user.model_dump(exclude_unset=True))
+        return JSONResponse(status_code=200,
+                            content={"message": "User profile updated successfully"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error") from e
