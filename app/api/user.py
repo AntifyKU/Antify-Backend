@@ -259,6 +259,17 @@ async def list_all_users(admin_user=Depends(require_admin)):
         raise
     except Exception as e:
         print(f"Error listing users: {str(e)}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from e
+
+@router.post("/auth/logout")
+async def logout_user(current_user=Depends(get_current_user)):
+    """Logout user (token revocation)"""
+    try:
+        uid = current_user["uid"]
+        # Revoke all refresh tokens for a specified user
+        auth.revoke_refresh_tokens(uid)
+        return JSONResponse(status_code=200,
+                            content={"message": "User logged out successfully"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
