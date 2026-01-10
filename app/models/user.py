@@ -70,3 +70,47 @@ class UserSchema(BaseModel):
                 }
             }
         }
+
+class UpdateProfileSchema(BaseModel):
+    """User profile update schema"""
+    username: Optional[str] = None
+    profile_picture: Optional[str] = None
+    preferences: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "username": "john_doe_updated",
+                "profile_picture": "http://example.com/profile.jpg",
+                "preferences": {
+                    "language": "spanish",
+                    "theme": "dark",
+                    "notifications_enabled": False
+                }
+            }
+        }
+
+class ChangeEmailSchema(BaseModel):
+    """Change email schema"""
+    new_email: EmailStr  # Changed from 'email' to 'new_email' to match backend
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "new_email": "newemail@example.com"
+            }
+        }
+
+class ChangePasswordSchema(BaseModel):
+    """Change password schema"""
+    new_password: str
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "new_password": "newstrongpassword456"
+            }
+        }
