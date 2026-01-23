@@ -54,15 +54,27 @@ async def message(sid: str, data: Dict[str, Any]):
             await sio.emit("error", {"message": "Empty message"}, to=sid)
             return
         
+        # Collect full response for suggestion generation
+        full_response = ""
+        
         # Stream response chunks
         async for chunk in chatbot_service.get_response_stream(
             content=content,
             conversation_history=conversation_history,
         ):
+            full_response += chunk
             await sio.emit("response", chunk, to=sid)
         
         # Signal completion
         await sio.emit("response_complete", to=sid)
+        
+        # Generate contextual suggestions based on updated conversation
+        updated_history = conversation_history + [
+            {"role": "user", "content": content},
+            {"role": "assistant", "content": full_response},
+        ]
+        suggestions = await chatbot_service.generate_suggestions(updated_history)
+        await sio.emit("suggestions", {"suggestions": suggestions}, to=sid)
         
     except Exception as e:
         print(f"Error handling message: {e}")
@@ -90,16 +102,28 @@ async def message_with_image(sid: str, data: Dict[str, Any]):
             await sio.emit("error", {"message": "No image provided"}, to=sid)
             return
         
+        # Collect full response for suggestion generation
+        full_response = ""
+        
         # Stream response chunks
         async for chunk in chatbot_service.get_response_with_image_stream(
             content=content,
             image_base64=image_base64,
             mime_type=mime_type,
         ):
+            full_response += chunk
             await sio.emit("response", chunk, to=sid)
         
         # Signal completion
         await sio.emit("response_complete", to=sid)
+        
+        # Generate contextual suggestions based on the image analysis
+        updated_history = [
+            {"role": "user", "content": f"[Image] {content}"},
+            {"role": "assistant", "content": full_response},
+        ]
+        suggestions = await chatbot_service.generate_suggestions(updated_history)
+        await sio.emit("suggestions", {"suggestions": suggestions}, to=sid)
         
     except Exception as e:
         print(f"Error handling image message: {e}")

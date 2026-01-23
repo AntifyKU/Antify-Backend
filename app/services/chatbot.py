@@ -2,51 +2,55 @@
 Chatbot Service
 Business logic for the ant-focused chatbot
 """
-from typing import List, Dict, Any, AsyncGenerator
+import json
+from typing import List, Dict, Any, AsyncGenerator, Optional
 
 from app.services.openrouter import openrouter_client
 
 
 # System prompt for the ant expert chatbot
-ANT_EXPERT_SYSTEM_PROMPT = """You are AntBot, an expert AI assistant specialized in myrmecology (the study of ants). You are part of the Antify app, which helps users identify and learn about ant species, particularly those found in Thailand and Southeast Asia.
+ANT_EXPERT_SYSTEM_PROMPT = """You are AntBot, an ant expert assistant for the Antify app (Thailand/Southeast Asia focus).
 
-Your expertise includes:
-- Ant species identification and classification
-- Ant behavior, ecology, and social structure
-- Ant habitats and distribution
-- Ant colony dynamics and queen/worker relationships
-- Pest control and beneficial uses of ants
-- Ant-related research and discoveries
+STRICT RULES:
+1. ONLY answer questions about ants. For non-ant topics, politely say: "I specialize in ants only. Please ask me about ants!"
+2. Keep responses SHORT (2-4 sentences max). Be concise and direct.
+3. Use simple language. Avoid long explanations.
+4. Include scientific names in parentheses when mentioning species.
 
-Guidelines:
-1. Be friendly, helpful, and educational
-2. When identifying ants from descriptions or images, provide your best guess with confidence levels
-3. If unsure, say so and suggest what additional information would help
-4. Include interesting facts to make learning engaging
-5. For pest-related questions, provide safe and practical advice
-6. Reference scientific names when discussing species
-7. Keep responses concise but informative
-8. If asked about non-ant topics, politely redirect to ant-related subjects
+Your expertise: ant identification, behavior, ecology, habitats, colonies, pest control.
 
-When analyzing images:
-- Describe what you observe (size, color, body shape, antennae)
-- Provide your species identification with confidence level
-- Suggest similar species if uncertain
-- Note any interesting behaviors visible in the image
+Response format:
+- Answer briefly and directly
+- Add 1 interesting fact if relevant
+- For images: describe key features → identify species → share 1 fact
 
-Remember: You are an expert but approachable resource for ant enthusiasts of all levels!"""
+Example good response:
+"This is a Weaver Ant (Oecophylla smaragdina). They build nests by weaving leaves together using silk from their larvae. Common in Southeast Asian gardens."
+
+Example bad response (too long):
+"The Weaver Ant, scientifically known as Oecophylla smaragdina, is a fascinating species... [continues for 10+ sentences]"
+
+Remember: SHORT answers only!"""
 
 
-# FAQ suggestions for quick access
+# System prompt for generating contextual suggestions
+SUGGESTION_SYSTEM_PROMPT = """Based on the conversation, generate 3 SHORT follow-up questions about the ant species or topic being discussed.
+
+Rules:
+1. Questions must be specific to the ant/topic in the conversation
+2. Each question should be 5-10 words max
+3. Make questions progressively more detailed
+4. Return ONLY a JSON array of 3 strings, nothing else
+
+Example output:
+["Are Fire Ants dangerous to pets?", "How to remove Fire Ant nests?", "Where do Fire Ants live in Thailand?"]"""
+
+
+# Default FAQ suggestions (shown when no context)
 FAQ_SUGGESTIONS = [
-    "What ant species are common in Thailand?",
-    "How do I identify a fire ant?",
-    "Are weaver ants dangerous to humans?",
-    "How can I safely remove ants from my home?",
-    "What do ants eat?",
-    "How long do ant queens live?",
-    "Why do ants follow trails?",
-    "What's the difference between ants and termites?",
+    "What ants are common in Thailand?",
+    "How to identify Fire Ants?",
+    "Are Weaver Ants dangerous?",
 ]
 
 
@@ -112,15 +116,15 @@ class ChatbotService:
         Yields:
             Response text chunks
         """
-        # Add context to help with ant identification
-        enhanced_prompt = f"""The user has sent an image and asks: "{content}"
+        # Add context to help with ant identification (kept short)
+        enhanced_prompt = f"""User sent an image: "{content}"
 
-Please analyze the image focusing on ant identification. If it shows an ant:
-1. Describe the visible characteristics
-2. Provide your best species identification
-3. Share relevant facts about this species
+Identify the ant briefly:
+1. Key features (2-3 words each)
+2. Species name (with scientific name)
+3. One interesting fact
 
-If the image doesn't clearly show an ant, let the user know and offer guidance on taking a better photo for identification."""
+If not an ant image, say so briefly."""
         
         async for chunk in openrouter_client.chat_with_image(
             text=enhanced_prompt,
@@ -128,9 +132,50 @@ If the image doesn't clearly show an ant, let the user know and offer guidance o
             mime_type=mime_type,
             system_prompt=self.system_prompt,
             temperature=0.7,
-            max_tokens=1024,
+            max_tokens=512,
         ):
             yield chunk
+    
+    async def generate_suggestions(
+        self,
+        conversation_history: List[Dict[str, Any]],
+    ) -> List[str]:
+        """
+        Generate contextual follow-up questions based on conversation.
+        
+        Args:
+            conversation_history: Previous messages for context
+            
+        Returns:
+            List of 3 suggested questions
+        """
+        if not conversation_history or len(conversation_history) < 2:
+            return FAQ_SUGGESTIONS
+        
+        # Build context from recent messages
+        recent_messages = conversation_history[-6:]  # Last 3 exchanges
+        context = "\n".join([
+            f"{msg.get('role', 'user')}: {msg.get('content', '')}"
+            for msg in recent_messages
+        ])
+        
+        try:
+            # Get suggestions from LLM
+            response = await openrouter_client.chat(
+                messages=[{"role": "user", "content": f"Conversation:\n{context}"}],
+                system_prompt=SUGGESTION_SYSTEM_PROMPT,
+                temperature=0.7,
+                max_tokens=150,
+            )
+            
+            # Parse JSON response
+            suggestions = json.loads(response.strip())
+            if isinstance(suggestions, list) and len(suggestions) >= 3:
+                return suggestions[:3]
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"Error generating suggestions: {e}")
+        
+        return FAQ_SUGGESTIONS
     
     def get_faq_suggestions(self) -> List[str]:
         """Get FAQ suggestions for quick questions"""

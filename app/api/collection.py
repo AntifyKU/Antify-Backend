@@ -2,7 +2,7 @@
 Collection and Favorites API Routes
 User's personal ant collection and favorites management
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional
 from datetime import datetime
 import uuid
@@ -15,6 +15,11 @@ from app.models.collection import (
     FavoriteItemCreate,
     FavoriteItemSchema,
     FavoriteListResponse,
+    FolderCreate,
+    FolderUpdate,
+    FolderSchema,
+    FolderListResponse,
+    AddToFoldersRequest,
 )
 from app.dependencies.auth import get_current_user
 
@@ -24,6 +29,7 @@ db = firestore.client()
 USERS_COLLECTION = "users"
 COLLECTION_SUBCOLLECTION = "collection"
 FAVORITES_SUBCOLLECTION = "favorites"
+FOLDERS_SUBCOLLECTION = "folders"
 SPECIES_COLLECTION = "species"
 
 
@@ -66,6 +72,9 @@ async def get_my_collection(
             data = doc.to_dict()
             data["id"] = doc.id
             data["user_id"] = user_id
+            # Ensure folder_ids is present (for backwards compatibility)
+            if "folder_ids" not in data:
+                data["folder_ids"] = []
             
             # Enrich with species details
             species_details = await get_species_details(data.get("species_id", ""))
@@ -155,6 +164,350 @@ async def remove_from_collection(
         doc_ref.delete()
         
         return {"message": "Item removed from collection"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== FOLDER ENDPOINTS ==============
+
+@router.get("/users/me/folders", response_model=FolderListResponse)
+async def get_my_folders(
+    current_user: dict = Depends(get_current_user),
+):
+    """Get current user's folders with item counts"""
+    try:
+        user_id = current_user["uid"]
+        folders_ref = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(FOLDERS_SUBCOLLECTION)
+        )
+        
+        docs = folders_ref.order_by("created_at", direction=firestore.Query.DESCENDING).stream()
+        
+        # Get all collection items to count items per folder
+        collection_ref = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(COLLECTION_SUBCOLLECTION)
+        )
+        collection_docs = list(collection_ref.stream())
+        
+        # Count items per folder
+        folder_item_counts = {}
+        for col_doc in collection_docs:
+            col_data = col_doc.to_dict()
+            folder_ids = col_data.get("folder_ids", [])
+            for folder_id in folder_ids:
+                folder_item_counts[folder_id] = folder_item_counts.get(folder_id, 0) + 1
+        
+        folders = []
+        for doc in docs:
+            data = doc.to_dict()
+            data["id"] = doc.id
+            data["user_id"] = user_id
+            data["item_count"] = folder_item_counts.get(doc.id, 0)
+            folders.append(data)
+        
+        return FolderListResponse(folders=folders, total=len(folders))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/users/me/folders", response_model=FolderSchema)
+async def create_folder(
+    folder: FolderCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Create a new folder"""
+    try:
+        user_id = current_user["uid"]
+        
+        # Check if folder with same name already exists
+        existing = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(FOLDERS_SUBCOLLECTION)
+            .where("name", "==", folder.name)
+            .limit(1)
+            .stream()
+        )
+        if len(list(existing)) > 0:
+            raise HTTPException(status_code=400, detail="Folder with this name already exists")
+        
+        # Create folder
+        folder_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+        
+        folder_data = folder.model_dump()
+        folder_data["created_at"] = now
+        folder_data["updated_at"] = now
+        
+        (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(FOLDERS_SUBCOLLECTION)
+            .document(folder_id)
+            .set(folder_data)
+        )
+        
+        folder_data["id"] = folder_id
+        folder_data["user_id"] = user_id
+        folder_data["item_count"] = 0
+        
+        return folder_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/users/me/folders/{folder_id}", response_model=FolderSchema)
+async def update_folder(
+    folder_id: str,
+    folder_update: FolderUpdate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Update a folder"""
+    try:
+        user_id = current_user["uid"]
+        
+        doc_ref = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(FOLDERS_SUBCOLLECTION)
+            .document(folder_id)
+        )
+        
+        doc = doc_ref.get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Folder not found")
+        
+        # Check if new name conflicts with existing folder
+        update_data = {k: v for k, v in folder_update.model_dump().items() if v is not None}
+        
+        if "name" in update_data:
+            existing = (
+                db.collection(USERS_COLLECTION)
+                .document(user_id)
+                .collection(FOLDERS_SUBCOLLECTION)
+                .where("name", "==", update_data["name"])
+                .limit(1)
+                .stream()
+            )
+            existing_list = list(existing)
+            if len(existing_list) > 0 and existing_list[0].id != folder_id:
+                raise HTTPException(status_code=400, detail="Folder with this name already exists")
+        
+        update_data["updated_at"] = datetime.utcnow()
+        doc_ref.update(update_data)
+        
+        # Get updated document
+        updated_doc = doc_ref.get()
+        folder_data = updated_doc.to_dict()
+        folder_data["id"] = folder_id
+        folder_data["user_id"] = user_id
+        
+        # Count items in this folder
+        collection_ref = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(COLLECTION_SUBCOLLECTION)
+            .where("folder_ids", "array_contains", folder_id)
+        )
+        folder_data["item_count"] = len(list(collection_ref.stream()))
+        
+        return folder_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/users/me/folders/{folder_id}")
+async def delete_folder(
+    folder_id: str,
+    delete_items: bool = Query(False, description="If true, also delete collection items in this folder"),
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a folder. Optionally delete items in the folder."""
+    try:
+        user_id = current_user["uid"]
+        
+        doc_ref = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(FOLDERS_SUBCOLLECTION)
+            .document(folder_id)
+        )
+        
+        doc = doc_ref.get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Folder not found")
+        
+        # Get items in this folder
+        collection_ref = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(COLLECTION_SUBCOLLECTION)
+            .where("folder_ids", "array_contains", folder_id)
+        )
+        items_in_folder = list(collection_ref.stream())
+        
+        if delete_items:
+            # Delete all items in the folder
+            for item_doc in items_in_folder:
+                item_doc.reference.delete()
+        else:
+            # Remove folder_id from items' folder_ids array
+            for item_doc in items_in_folder:
+                item_data = item_doc.to_dict()
+                folder_ids = item_data.get("folder_ids", [])
+                if folder_id in folder_ids:
+                    folder_ids.remove(folder_id)
+                    item_doc.reference.update({"folder_ids": folder_ids})
+        
+        # Delete the folder
+        doc_ref.delete()
+        
+        return {
+            "message": "Folder deleted",
+            "items_affected": len(items_in_folder),
+            "items_deleted": delete_items
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== FOLDER ASSIGNMENT ENDPOINTS ==============
+
+@router.post("/users/me/collection/{item_id}/folders")
+async def add_item_to_folders(
+    item_id: str,
+    request: AddToFoldersRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Add a collection item to one or more folders"""
+    try:
+        user_id = current_user["uid"]
+        
+        # Get the collection item
+        item_ref = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(COLLECTION_SUBCOLLECTION)
+            .document(item_id)
+        )
+        
+        item_doc = item_ref.get()
+        if not item_doc.exists:
+            raise HTTPException(status_code=404, detail="Collection item not found")
+        
+        # Verify all folders exist
+        for folder_id in request.folder_ids:
+            folder_ref = (
+                db.collection(USERS_COLLECTION)
+                .document(user_id)
+                .collection(FOLDERS_SUBCOLLECTION)
+                .document(folder_id)
+            )
+            if not folder_ref.get().exists:
+                raise HTTPException(status_code=404, detail=f"Folder {folder_id} not found")
+        
+        # Update item's folder_ids
+        item_data = item_doc.to_dict()
+        current_folder_ids = set(item_data.get("folder_ids", []))
+        current_folder_ids.update(request.folder_ids)
+        
+        item_ref.update({"folder_ids": list(current_folder_ids)})
+        
+        return {"message": "Item added to folders", "folder_ids": list(current_folder_ids)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/users/me/collection/{item_id}/folders/{folder_id}")
+async def remove_item_from_folder(
+    item_id: str,
+    folder_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Remove a collection item from a folder"""
+    try:
+        user_id = current_user["uid"]
+        
+        # Get the collection item
+        item_ref = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(COLLECTION_SUBCOLLECTION)
+            .document(item_id)
+        )
+        
+        item_doc = item_ref.get()
+        if not item_doc.exists:
+            raise HTTPException(status_code=404, detail="Collection item not found")
+        
+        # Update item's folder_ids
+        item_data = item_doc.to_dict()
+        folder_ids = item_data.get("folder_ids", [])
+        
+        if folder_id not in folder_ids:
+            raise HTTPException(status_code=400, detail="Item is not in this folder")
+        
+        folder_ids.remove(folder_id)
+        item_ref.update({"folder_ids": folder_ids})
+        
+        return {"message": "Item removed from folder", "folder_ids": folder_ids}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/users/me/collection/{item_id}/folders")
+async def set_item_folders(
+    item_id: str,
+    request: AddToFoldersRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Set the folders for a collection item (replaces existing folder assignments)"""
+    try:
+        user_id = current_user["uid"]
+        
+        # Get the collection item
+        item_ref = (
+            db.collection(USERS_COLLECTION)
+            .document(user_id)
+            .collection(COLLECTION_SUBCOLLECTION)
+            .document(item_id)
+        )
+        
+        item_doc = item_ref.get()
+        if not item_doc.exists:
+            raise HTTPException(status_code=404, detail="Collection item not found")
+        
+        # Verify all folders exist
+        for folder_id in request.folder_ids:
+            folder_ref = (
+                db.collection(USERS_COLLECTION)
+                .document(user_id)
+                .collection(FOLDERS_SUBCOLLECTION)
+                .document(folder_id)
+            )
+            if not folder_ref.get().exists:
+                raise HTTPException(status_code=404, detail=f"Folder {folder_id} not found")
+        
+        # Set item's folder_ids
+        item_ref.update({"folder_ids": request.folder_ids})
+        
+        return {"message": "Item folders updated", "folder_ids": request.folder_ids}
     except HTTPException:
         raise
     except Exception as e:

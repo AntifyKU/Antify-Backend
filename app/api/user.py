@@ -1,13 +1,14 @@
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, UploadFile, File
 from app.models.user import SignUpSchema, LoginSchema, UserSchema, ChangePasswordSchema, UpdateProfileSchema, ChangeEmailSchema
 from app.dependencies.auth import get_current_user, verify_token
 
 from datetime import datetime, timezone
+import uuid
 
 import firebase_admin
-from firebase_admin import auth, firestore
+from firebase_admin import auth, firestore, storage
 from app.firebase import firebase
 import requests
 import traceback
@@ -217,6 +218,114 @@ async def change_password(password_change: ChangePasswordSchema,
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+
+@router.post("/users/me/profile-picture")
+async def upload_profile_picture(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user)
+):
+    """Upload a new profile picture"""
+    try:
+        from app.firebase import bucket
+        
+        uid = current_user["uid"]
+        
+        # Validate file type
+        allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid file type. Allowed: JPEG, PNG, GIF, WEBP"
+            )
+        
+        # Read file content
+        content = await file.read()
+        
+        # Limit file size (5MB)
+        max_size = 5 * 1024 * 1024
+        if len(content) > max_size:
+            raise HTTPException(
+                status_code=400, 
+                detail="File too large. Maximum size is 5MB"
+            )
+        
+        # Generate unique filename
+        file_extension = file.filename.split(".")[-1] if file.filename else "jpg"
+        filename = f"profile_pictures/{uid}/{uuid.uuid4()}.{file_extension}"
+        
+        # Upload to Firebase Storage
+        blob = bucket.blob(filename)
+        blob.upload_from_string(content, content_type=file.content_type)
+        
+        # Make the blob publicly accessible
+        blob.make_public()
+        
+        # Get public URL
+        public_url = blob.public_url
+        
+        # Update user profile with new picture URL
+        db.collection("users").document(uid).update({
+            "profile_picture": public_url,
+            "lasted_update": datetime.now(timezone.utc)
+        })
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": "Profile picture uploaded successfully",
+                "profile_picture_url": public_url
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error uploading profile picture: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.delete("/users/me/profile-picture")
+async def delete_profile_picture(current_user=Depends(get_current_user)):
+    """Delete user's profile picture"""
+    try:
+        from app.firebase import bucket
+        
+        uid = current_user["uid"]
+        
+        # Get current user data
+        user_doc = db.collection("users").document(uid).get()
+        if not user_doc.exists:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_data = user_doc.to_dict()
+        current_picture_url = user_data.get("profile_picture")
+        
+        # Delete from Storage if exists
+        if current_picture_url and "firebase" in current_picture_url:
+            try:
+                # Extract blob path from URL
+                # URL format: https://storage.googleapis.com/bucket-name/path/to/file
+                blob_path = current_picture_url.split(f"{bucket.name}/")[-1]
+                blob = bucket.blob(blob_path)
+                blob.delete()
+            except Exception as e:
+                print(f"Warning: Could not delete old profile picture: {e}")
+        
+        # Update user profile
+        db.collection("users").document(uid).update({
+            "profile_picture": None,
+            "lasted_update": datetime.now(timezone.utc)
+        })
+        
+        return JSONResponse(
+            status_code=200,
+            content={"message": "Profile picture deleted successfully"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 def require_admin(user=Depends(get_current_user)):
     """Dependency to ensure the current user is an admin"""
     try:
@@ -271,5 +380,91 @@ async def logout_user(current_user=Depends(get_current_user)):
         auth.revoke_refresh_tokens(uid)
         return JSONResponse(status_code=200,
                             content={"message": "User logged out successfully"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ============== PUSH NOTIFICATIONS ==============
+
+from pydantic import BaseModel
+from typing import Optional
+
+class PushTokenSchema(BaseModel):
+    """Schema for registering push token"""
+    push_token: str
+    platform: str  # 'ios' or 'android'
+    device_id: Optional[str] = None
+
+
+@router.post("/users/me/push-token")
+async def register_push_token(
+    token_data: PushTokenSchema,
+    current_user=Depends(get_current_user)
+):
+    """Register a push notification token for the current user"""
+    try:
+        uid = current_user["uid"]
+        
+        # Store the push token in the user's document
+        db.collection("users").document(uid).update({
+            "push_token": token_data.push_token,
+            "push_platform": token_data.platform,
+            "push_device_id": token_data.device_id,
+            "push_token_updated_at": datetime.now(timezone.utc)
+        })
+        
+        return JSONResponse(
+            status_code=200,
+            content={"message": "Push token registered successfully"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.delete("/users/me/push-token")
+async def unregister_push_token(current_user=Depends(get_current_user)):
+    """Unregister push notification token for the current user"""
+    try:
+        uid = current_user["uid"]
+        
+        # Remove the push token from the user's document
+        db.collection("users").document(uid).update({
+            "push_token": None,
+            "push_platform": None,
+            "push_device_id": None,
+            "push_token_updated_at": datetime.now(timezone.utc)
+        })
+        
+        return JSONResponse(
+            status_code=200,
+            content={"message": "Push token unregistered successfully"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/users/me/push-token")
+async def get_push_token(current_user=Depends(get_current_user)):
+    """Get the current user's push token info"""
+    try:
+        uid = current_user["uid"]
+        
+        user_doc = db.collection("users").document(uid).get()
+        if not user_doc.exists:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_data = user_doc.to_dict()
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "push_token": user_data.get("push_token"),
+                "platform": user_data.get("push_platform"),
+                "device_id": user_data.get("push_device_id"),
+                "updated_at": user_data.get("push_token_updated_at").isoformat() if user_data.get("push_token_updated_at") else None
+            }
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
