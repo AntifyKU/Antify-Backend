@@ -6,7 +6,7 @@ from typing import Optional, List
 from datetime import datetime
 
 
-# ============== FOLDER SCHEMAS ==============
+# FOLDER SCHEMAS
 
 class FolderBase(BaseModel):
     """Base schema for folders"""
@@ -59,7 +59,7 @@ class AddToFoldersRequest(BaseModel):
     folder_ids: List[str] = Field(..., description="List of folder IDs to add the item to")
 
 
-# ============== COLLECTION SCHEMAS ==============
+# COLLECTION SCHEMAS
 
 class CollectionItemBase(BaseModel):
     """Base schema for collection items"""
@@ -142,3 +142,50 @@ class FavoriteListResponse(BaseModel):
     """Response for listing favorites"""
     items: List[FavoriteItemSchema]
     total: int
+
+# NEWS FAVORITES SCHEMAS
+
+class FavoriteNewsBase(BaseModel):
+    """Base schema for favorite news items"""
+    news_id: str = Field(..., description="ID of the news item")
+
+
+class FavoriteNewsCreate(FavoriteNewsBase):
+    """Schema for adding news to favorites"""
+    pass
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "news_id": "news_123456"
+            }
+        }
+
+
+class FavoriteNewsSchema(FavoriteNewsBase):
+    """Full favorite news item with metadata"""
+    id: str
+    user_id: str
+    added_at: datetime
+    # News details (populated from news collection)
+    news_title: Optional[str] = None
+    news_description: Optional[str] = None
+    news_link: Optional[str] = None
+    news_image: Optional[str] = None
+    news_source: Optional[str] = None
+    news_published_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class FavoriteNewsListResponse(BaseModel):
+    """Response for listing favorite news"""
+    items: List[FavoriteNewsSchema]
+    total: int
+
+
+class CheckFavoriteNewsResponse(BaseModel):
+    """Response for checking if news is favorited"""
+    is_favorite: bool
+    favorite_id: Optional[str] = None
