@@ -9,7 +9,7 @@ import uuid
 
 import firebase_admin
 from firebase_admin import auth, firestore, storage
-from app.firebase import firebase
+from app.firebase import firebase, bucket
 import requests
 import traceback
 
@@ -120,19 +120,37 @@ async def get_account_info(current_user=Depends(get_current_user)):
 
 @router.delete("/users/me")
 async def delete_my_account(current_user=Depends(get_current_user)):
-    """Delete user account by user ID"""
+    """Delete user account"""
     try:
-        # Delete user from Firebase Authentication
-        user_id = current_user["uid"]
-        auth.delete_user(user_id)
-        # Delete user document from Firestore
-        db.collection("users").document(user_id).delete()
-        return JSONResponse(status_code=200,
-                            content={"message": "User account deleted successfully"})
+        uid = current_user["uid"]
+
+        # delete profile picture if exists
+        user_doc = db.collection("users").document(uid).get()
+        if user_doc.exists:
+            data = user_doc.to_dict()
+            pic = data.get("profile_picture")
+            if pic and "storage.googleapis.com" in pic:
+                try:
+                    blob_path = pic.split(f"{bucket.name}/")[-1]
+                    bucket.blob(blob_path).delete()
+                except Exception as e:
+                    print(f"Warning: Could not delete profile picture: {e}")
+
+        # delete Firestore user
+        db.collection("users").document(uid).delete()
+
+        # delete from Firebase Auth
+        auth.delete_user(uid)
+
+        return JSONResponse(
+            status_code=200,
+            content={"message": "Account deleted successfully"}
+        )
     except auth.UserNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="User not found") from exc
+        raise HTTPException(404, "User not found") from exc
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(500, str(e)) from e
+
 
 @router.put("/users/me/profile")
 async def update_profile(profile: UpdateProfileSchema, 
@@ -226,8 +244,6 @@ async def upload_profile_picture(
 ):
     """Upload a new profile picture"""
     try:
-        from app.firebase import bucket
-        
         uid = current_user["uid"]
         
         # Validate file type
@@ -288,8 +304,6 @@ async def upload_profile_picture(
 async def delete_profile_picture(current_user=Depends(get_current_user)):
     """Delete user's profile picture"""
     try:
-        from app.firebase import bucket
-        
         uid = current_user["uid"]
         
         # Get current user data
