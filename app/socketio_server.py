@@ -11,9 +11,9 @@ from app.services.chatbot import chatbot_service
 # Create Socket.IO server with CORS enabled
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins="*",
+    cors_allowed_origins=[],
     logger=True,
-    engineio_logger=False,
+    engineio_logger=True,
 )
 
 # Create ASGI app for Socket.IO
