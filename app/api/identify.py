@@ -218,3 +218,104 @@ async def detect_ants(
                 detail="AI service is currently unavailable. Please try again later."
             )
         raise HTTPException(status_code=500, detail=f"Detection failed: {error_msg}")
+
+
+@router.post("/identify/species/details")
+async def identify_species_details(
+    file: UploadFile = File(..., description="Image file to identify"),
+    confidence: float = Query(0.5, ge=0.0, le=1.0, description="Minimum confidence threshold"),
+    top_k: int = Query(5, ge=1, le=10, description="Number of top predictions"),
+):
+    """
+    Identify ant species AND return full species info from Firestore.
+    
+    Combines AI classification with database lookup in a single call:
+    1. Sends image to AI model server for classification
+    2. Takes the top prediction (scientific name)
+    3. Queries Firestore 'species' collection for matching species
+    4. Returns both predictions and full species data
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Please upload an image file."
+        )
+
+    # Step 1: Classify with AI model server
+    try:
+        result = await ai_client.classify_image(
+            file=file,
+            confidence_threshold=confidence,
+            top_k=top_k,
+        )
+    except Exception as e:
+        error_msg = str(e)
+        if "ConnectError" in error_msg or "Connection refused" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="AI service is currently unavailable. Please try again later."
+            )
+        raise HTTPException(status_code=500, detail=f"Identification failed: {error_msg}")
+
+    # Check if the AI rejected the image (safety gate)
+    if not result.get("success", True):
+        return {
+            "success": False,
+            "message": result.get("message", "Image was not recognized as an ant."),
+            "predictions": [],
+            "species_info": None,
+        }
+
+    # Build predictions list
+    predictions = []
+    for i, pred in enumerate(result.get("top_predictions", result.get("top5_predictions", [])), 1):
+        predictions.append({
+            "rank": pred.get("rank", i),
+            "class_name": pred.get("class_name", pred.get("species", "Unknown")),
+            "confidence": pred.get("confidence", 0.0),
+            "species_id": pred.get("species_id"),
+        })
+
+    top_scientific_name = result.get(
+        "top_prediction",
+        predictions[0]["class_name"] if predictions else None,
+    )
+
+    # Step 2: Look up species in Firestore by scientific_name
+    species_info = None
+    if top_scientific_name:
+        try:
+            from firebase_admin import firestore as fs
+            db = fs.client()
+            query = (
+                db.collection("species")
+                .where("scientific_name", "==", top_scientific_name)
+                .limit(1)
+            )
+            docs = query.stream()
+            for doc in docs:
+                species_info = doc.to_dict()
+                species_info["id"] = doc.id
+                # Convert timestamps to ISO strings for JSON
+                for ts_field in ("created_at", "updated_at"):
+                    if ts_field in species_info and species_info[ts_field] is not None:
+                        try:
+                            species_info[ts_field] = species_info[ts_field].isoformat()
+                        except (AttributeError, TypeError):
+                            pass
+                break
+        except Exception as e:
+            # Don't fail the whole request if Firestore lookup fails
+            print(f"[identify/species/details] Firestore lookup error: {e}")
+
+    return {
+        "success": True,
+        "top_prediction": top_scientific_name,
+        "top_confidence": result.get(
+            "top_confidence",
+            predictions[0]["confidence"] if predictions else 0.0,
+        ),
+        "predictions": predictions,
+        "species_info": species_info,
+        "model": result.get("model"),
+    }
