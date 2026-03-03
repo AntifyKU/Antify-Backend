@@ -1,8 +1,8 @@
 """
 Species Pydantic Models
 """
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 
@@ -15,6 +15,9 @@ class ClassificationSchema(BaseModel):
 
 class SpeciesBase(BaseModel):
     """Base species schema with common fields"""
+    
+    model_config = ConfigDict(extra="allow")
+    
     name: str = Field(..., description="Common name of the ant species")
     scientific_name: str = Field(..., description="Scientific name (Latin)")
     classification: ClassificationSchema
@@ -87,4 +90,4 @@ class SpeciesListResponse(BaseModel):
     species: List[SpeciesSchema]
     total: int
     page: int = 1
-    limit: int = 50
+    limit: int = 500

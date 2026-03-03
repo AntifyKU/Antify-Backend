@@ -58,13 +58,13 @@ app.include_router(news_router.router, prefix=BASE_URL, tags=["News"])
 app.include_router(feedback_router.router, prefix=BASE_URL, tags=["Feedback"])
 
 # Create Socket.IO ASGI app and mount it
-socket_app = socketio.ASGIApp(sio, other_asgi_app=app)
+app = socketio.ASGIApp(sio, other_asgi_app=app)
 
 
 # For running with uvicorn directly
 if __name__ == "__main__":
     uvicorn.run(
-        "app.main:socket_app",
+        "app.main:app",
         host="0.0.0.0",
         port=8000,
         reload=True

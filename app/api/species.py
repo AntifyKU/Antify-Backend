@@ -41,7 +41,7 @@ async def list_species(
     habitat: Optional[str] = Query(None, description="Comma-separated habitats to filter by"),
     distribution: Optional[str] = Query(None, description="Comma-separated regions to filter by"),
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(500, ge=1, le=1000),
 ):
     """
     List all species with optional filters.
