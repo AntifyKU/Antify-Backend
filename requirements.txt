@@ -72,3 +72,6 @@ beautifulsoup4==4.12.3
 
 # Background task scheduling
 apscheduler==3.10.4
+
+# Image storage
+cloudinary>=1.44.0
