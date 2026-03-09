@@ -3,8 +3,8 @@ Species Management API Routes
 CRUD operations for ant species data
 """
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional, List
-from datetime import datetime
+from typing import Annotated, Optional, List
+from datetime import datetime, timezone
 import uuid
 
 from firebase_admin import firestore
@@ -19,9 +19,10 @@ from app.dependencies.auth import get_current_user
 router = APIRouter()
 db = firestore.client()
 SPECIES_COLLECTION = "species"
+SPECIES_NOT_FOUND = "Species not found"
 
 
-def require_admin(current_user: dict = Depends(get_current_user)):
+def require_admin(current_user: Annotated[dict, Depends(get_current_user)]):
     """Dependency to check if user is admin"""
     user_ref = db.collection("users").document(current_user["uid"])
     user_doc = user_ref.get()
@@ -33,15 +34,20 @@ def require_admin(current_user: dict = Depends(get_current_user)):
     return current_user
 
 
-@router.get("/species", response_model=SpeciesListResponse)
+@router.get(
+    "/species",
+    response_model=SpeciesListResponse,
+    responses={500: {"description": "Internal server error"}}
+)
 async def list_species(
-    search: Optional[str] = Query(None, description="Search by name or scientific name"),
-    tags: Optional[str] = Query(None, description="Comma-separated tags to filter by"),
-    colors: Optional[str] = Query(None, description="Comma-separated colors to filter by"),
-    habitat: Optional[str] = Query(None, description="Comma-separated habitats to filter by"),
-    distribution: Optional[str] = Query(None, description="Comma-separated regions to filter by"),
-    page: int = Query(1, ge=1),
-    limit: int = Query(500, ge=1, le=1000),
+    search: Annotated[Optional[str], Query(description="Search by name or scientific name")] = None,
+    tags: Annotated[Optional[str], Query(description="Comma-separated tags to filter by")] = None,
+    colors: Annotated[Optional[str], Query(description="Comma-separated colors to filter by")] = None,
+    habitat: Annotated[Optional[str], Query(description="Comma-separated habitats to filter by")] = None,
+    distribution: Annotated[Optional[str], Query(description="Comma-separated regions to filter by")] = None,
+    province: Annotated[Optional[str], Query(description="Province name — filters by distribution_v2.provinces")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
 ):
     """
     List all species with optional filters.
@@ -103,14 +109,30 @@ async def list_species(
                 )
             ]
         
-        # Distribution filter
+        # Distribution filter — uses substring matching in both directions so that
+        # "Bangkok" matches "Bangkok Province" and "Bangkok Province" matches "Bangkok"
         if distribution:
             dist_list = [d.strip().lower() for d in distribution.split(",")]
             filtered_species = [
                 s for s in filtered_species
                 if any(
-                    d.lower() in [dist.lower() for dist in s.get("distribution", [])]
+                    any(
+                        d in dist.lower() or dist.lower() in d
+                        for dist in s.get("distribution", [])
+                    )
                     for d in dist_list
+                )
+            ]
+
+        # Province filter — checks distribution_v2.provinces (the correct province-level field)
+        # Uses substring matching so "Bangkok" matches "Bangkok Province" and vice versa
+        if province:
+            prov_query = province.strip().lower()
+            filtered_species = [
+                s for s in filtered_species
+                if any(
+                    prov_query in p.lower() or p.lower() in prov_query
+                    for p in (s.get("distribution_v2") or {}).get("provinces", [])
                 )
             ]
         
@@ -130,7 +152,14 @@ async def list_species(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/species/{species_id}", response_model=SpeciesSchema)
+@router.get(
+    "/species/{species_id}",
+    response_model=SpeciesSchema,
+    responses={
+        404: {"description": "Species not found"},
+        500: {"description": "Internal server error"}
+    }
+)
 async def get_species(species_id: str):
     """Get a single species by ID"""
     try:
@@ -138,7 +167,7 @@ async def get_species(species_id: str):
         doc = doc_ref.get()
         
         if not doc.exists:
-            raise HTTPException(status_code=404, detail="Species not found")
+            raise HTTPException(status_code=404, detail=SPECIES_NOT_FOUND)
         
         data = doc.to_dict()
         data["id"] = doc.id
@@ -149,15 +178,19 @@ async def get_species(species_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/species", response_model=SpeciesSchema)
+@router.post(
+    "/species",
+    response_model=SpeciesSchema,
+    responses={500: {"description": "Internal server error"}}
+)
 async def create_species(
     species: SpeciesCreateSchema,
-    current_user: dict = Depends(require_admin),
+    current_user: Annotated[dict, Depends(require_admin)],
 ):
     """Create a new species (Admin only)"""
     try:
         species_id = str(uuid.uuid4())
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         species_data = species.model_dump()
         species_data["created_at"] = now
@@ -175,11 +208,18 @@ async def create_species(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/species/{species_id}", response_model=SpeciesSchema)
+@router.put(
+    "/species/{species_id}",
+    response_model=SpeciesSchema,
+    responses={
+        404: {"description": "Species not found"},
+        500: {"description": "Internal server error"}
+    }
+)
 async def update_species(
     species_id: str,
     species_update: SpeciesUpdateSchema,
-    current_user: dict = Depends(require_admin),
+    current_user: Annotated[dict, Depends(require_admin)],
 ):
     """Update an existing species (Admin only)"""
     try:
@@ -187,7 +227,7 @@ async def update_species(
         doc = doc_ref.get()
         
         if not doc.exists:
-            raise HTTPException(status_code=404, detail="Species not found")
+            raise HTTPException(status_code=404, detail=SPECIES_NOT_FOUND)
         
         # Get existing data and update with new values
         existing_data = doc.to_dict()
@@ -197,7 +237,7 @@ async def update_species(
         if "classification" in update_data and update_data["classification"]:
             update_data["classification"] = dict(update_data["classification"])
         
-        update_data["updated_at"] = datetime.utcnow()
+        update_data["updated_at"] = datetime.now(timezone.utc)
         
         doc_ref.update(update_data)
         
@@ -211,10 +251,16 @@ async def update_species(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/species/{species_id}")
+@router.delete(
+    "/species/{species_id}",
+    responses={
+        404: {"description": "Species not found"},
+        500: {"description": "Internal server error"}
+    }
+)
 async def delete_species(
     species_id: str,
-    current_user: dict = Depends(require_admin),
+    current_user: Annotated[dict, Depends(require_admin)],
 ):
     """Delete a species (Admin only)"""
     try:
@@ -222,7 +268,7 @@ async def delete_species(
         doc = doc_ref.get()
         
         if not doc.exists:
-            raise HTTPException(status_code=404, detail="Species not found")
+            raise HTTPException(status_code=404, detail=SPECIES_NOT_FOUND)
         
         doc_ref.delete()
         
