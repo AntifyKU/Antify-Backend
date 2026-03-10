@@ -12,9 +12,9 @@ import traceback
 
 import cloudinary
 import cloudinary.uploader
-
 import firebase_admin
 from firebase_admin import auth, firestore
+import app.config
 from app.firebase import firebase
 import requests
 
@@ -124,8 +124,6 @@ async def login_user(user: LoginSchema):
                 "message": "Login successful",
                 "user_id": firebase_user.uid,
                 "id_token": user_cred["idToken"],
-                "refresh_token": user_cred["refreshToken"],
-                "expires_in": user_cred.get("expiresIn", "3600"),
             },
         )
 
