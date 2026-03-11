@@ -4,8 +4,13 @@ Business logic for the ant-focused chatbot
 """
 import json
 from typing import List, Dict, Any, AsyncGenerator, Optional
+import re
 
+from firebase_admin import firestore
 from app.services.openrouter import openrouter_client
+
+db = firestore.client()
+SPECIES_COLLECTION = "species"
 
 
 # System prompt for the ant expert chatbot
@@ -16,6 +21,8 @@ STRICT RULES:
 2. Keep responses SHORT (2-4 sentences max). Be concise and direct.
 3. Use simple language. Avoid long explanations.
 4. Include scientific names in parentheses when mentioning species.
+5. IMPORTANT: You MUST answer in the exact same language as the user's prompt (e.g., if asked in Thai, answer in Thai. If asked in English, answer in English).
+6. DO NOT use markdown formatting (like **bold** or *italics*). Use plain text ONLY.
 
 Your expertise: ant identification, behavior, ecology, habitats, colonies, pest control.
 
@@ -59,6 +66,48 @@ class ChatbotService:
     
     def __init__(self):
         self.system_prompt = ANT_EXPERT_SYSTEM_PROMPT
+        
+    def _get_relevant_ant_context(self, query: str) -> str:
+        """Fetch ant details from Firebase if query matches ant names/tags."""
+        try:
+            # Simple keyword extraction: words longer than 3 chars
+            words = set(re.findall(r'\b\w{3,}\b', query.lower()))
+            if not words:
+                return ""
+                
+            species_ref = db.collection(SPECIES_COLLECTION)
+            docs = species_ref.stream()
+            
+            matches = []
+            for doc in docs:
+                data = doc.to_dict()
+                name = data.get("name", "").lower()
+                scientific = data.get("scientific_name", "").lower()
+                tags = [t.lower() for t in data.get("tags", [])]
+                
+                # Check for overlap
+                text_to_search = name + " " + scientific + " " + " ".join(tags)
+                if any(w in text_to_search for w in words):
+                    matches.append(data)
+                    
+                if len(matches) >= 3:
+                    break
+                    
+            if not matches:
+                return ""
+                
+            context_parts = ["\n[Database Context about mentioned ants]:"]
+            for m in matches:
+                context_parts.append(
+                    f"- {m.get('name')} ({m.get('scientific_name')}): "
+                    f"About: {m.get('about', '')}. "
+                    f"Habitat: {', '.join(m.get('habitat', []))}. "
+                    f"Behavior: {m.get('behavior', '')}."
+                )
+            return "\n".join(context_parts)
+        except Exception as e:
+            print(f"Error fetching RAG context: {e}")
+            return ""
     
     async def get_response_stream(
         self,
@@ -87,13 +136,17 @@ class ChatbotService:
                     "content": msg.get("content", "")
                 })
         
+        # Get context from Firebase based on latest message
+        rag_context = self._get_relevant_ant_context(content)
+        final_system_prompt = self.system_prompt + rag_context
+        
         # Add current user message
         messages.append({"role": "user", "content": content})
         
         # Stream response
         async for chunk in openrouter_client.chat_stream(
             messages=messages,
-            system_prompt=self.system_prompt,
+            system_prompt=final_system_prompt,
             temperature=0.7,
             max_tokens=1024,
         ):
@@ -125,12 +178,16 @@ Identify the ant briefly:
 3. One interesting fact
 
 If not an ant image, say so briefly."""
+
+        # Get context from Firebase based on current question
+        rag_context = self._get_relevant_ant_context(content)
+        final_system_prompt = self.system_prompt + rag_context
         
         async for chunk in openrouter_client.chat_with_image(
             text=enhanced_prompt,
             image_base64=image_base64,
             mime_type=mime_type,
-            system_prompt=self.system_prompt,
+            system_prompt=final_system_prompt,
             temperature=0.7,
             max_tokens=512,
         ):
