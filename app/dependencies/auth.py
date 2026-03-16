@@ -1,6 +1,7 @@
 """ Firebase authentication utilities """
-from fastapi import Header, HTTPException
-from firebase_admin import auth
+from typing import Annotated
+from fastapi import Header, HTTPException, Depends
+from firebase_admin import auth, firestore
 
 BEARER_PREFIX = "Bearer "
 INVALID_TOKEN_DETAIL = "Invalid token"
@@ -10,13 +11,7 @@ AUTHENTICATION_FAILED_DETAIL = "Authentication failed"
 
 
 def _verify_firebase_token(token: str) -> dict:
-    """
-    Verify a Firebase ID token.
-
-    Raises HTTP 401 with a clear detail message so the frontend
-    can distinguish between an expired token (→ try silent refresh)
-    and a genuinely invalid / revoked token (→ force re-login).
-    """
+    """Verify a Firebase ID token"""
     try:
         # clock_skew_seconds gives a small grace window for clock drift
         # between the mobile device and Firebase servers.
@@ -54,7 +49,7 @@ def _verify_firebase_token(token: str) -> dict:
 
 
 def verify_token(authorization: str = Header(...)) -> dict:
-    """Dependency: verify Firebase ID token from Authorization header."""
+    """Dependency: verify Firebase ID token from Authorization header"""
     if not authorization.startswith(BEARER_PREFIX):
         raise HTTPException(status_code=401, detail=INVALID_TOKEN_DETAIL)
     token = authorization.removeprefix(BEARER_PREFIX).strip()
@@ -62,8 +57,27 @@ def verify_token(authorization: str = Header(...)) -> dict:
 
 
 def get_current_user(authorization: str = Header(...)) -> dict:
-    """Dependency: return the decoded Firebase token for the current user."""
+    """Dependency: return the decoded Firebase token for the current user"""
     if not authorization.startswith(BEARER_PREFIX):
         raise HTTPException(status_code=401, detail=INVALID_TOKEN_DETAIL)
     token = authorization.removeprefix(BEARER_PREFIX).strip()
     return _verify_firebase_token(token)
+
+def require_admin(current_user: Annotated[dict, Depends(get_current_user)]) -> dict:
+    """Dependency: verify the calling user has the 'admin' role"""
+    try:
+        db = firestore.client()
+        doc = db.collection("users").document(current_user["uid"]).get()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Error checking admin status",
+        ) from exc
+
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if doc.to_dict().get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    return current_user

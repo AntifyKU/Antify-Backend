@@ -1,4 +1,4 @@
-""" User authentication & management endpoints"""
+"""User authentication & management endpoints"""
 from datetime import datetime, timezone
 from typing import Optional, Annotated
 import uuid
@@ -28,7 +28,13 @@ from app.firebase import firebase
 
 from pydantic import BaseModel
 
+# Public routes (no admin required)
 router = APIRouter()
+
+# Admin-only routes
+# so these handler functions have no auth parameter in their signatures.
+admin_router = APIRouter()
+
 db = firestore.client()
 
 CLOUDINARY_DOMAIN = "cloudinary.com"
@@ -37,54 +43,41 @@ INTERNAL_SERVER_ERROR = "Internal server error"
 
 
 def _extract_cloudinary_public_id(url: str) -> str:
-    """
-    Extract the Cloudinary public_id from a secure URL.
-
-    Example URL:
-      https://res.cloudinary.com/<cloud>/image/upload/v1234567890/profile_pictures/uid/abc.jpg
-    Returns:
-      profile_pictures/uid/abc
-    """
-    # Everything after "/upload/"
+    """Extract the Cloudinary public_id from a secure URL."""
     after_upload = url.split("/upload/")[-1]
-    # Drop optional version segment (v<digits>/)
     parts = after_upload.split("/")
     if parts[0].startswith("v") and parts[0][1:].isdigit():
         parts = parts[1:]
-    # Drop file extension
-    path_no_ext = "/".join(parts).rsplit(".", 1)[0]
-    return path_no_ext
+    return "/".join(parts).rsplit(".", 1)[0]
 
 
-@router.post("/auth/signup", responses={400: {"description": "Username or email already exists"},
-                                        500: {"description": INTERNAL_SERVER_ERROR}})
+@router.post(
+    "/auth/signup",
+    responses={
+        400: {"description": "Username or email already exists"},
+        500: {"description": INTERNAL_SERVER_ERROR},
+    },
+)
 async def create_new_account(user: SignUpSchema):
-    """Create a new user account"""
-    username = user.username
-    email = user.email
-    password = user.password
-
+    """Create a new user account."""
     try:
-        # Check if username already exists in Firestore
         users_ref = db.collection("users")
-        query = users_ref.where("username", "==", username).limit(1).get()
-        if query:
+        if users_ref.where("username", "==", user.username).limit(1).get():
             raise HTTPException(status_code=400, detail="Username already exists")
 
-        # Create user in Firebase Authentication
-        firebase_user = auth.create_user(display_name=username, email=email, password=password)
+        firebase_user = auth.create_user(
+            display_name=user.username, email=user.email, password=user.password
+        )
 
-        # Add user to Firestore
         user_data = UserSchema(
             user_id=firebase_user.uid,
-            username=username,
-            email=email,
+            username=user.username,
+            email=user.email,
             created_at=datetime.now(timezone.utc),
         )
         try:
             db.collection("users").document(firebase_user.uid).set(user_data.model_dump())
         except Exception as e:
-            # Rollback Firebase Auth user if Firestore write fails
             auth.delete_user(firebase_user.uid)
             raise e
 
@@ -98,35 +91,29 @@ async def create_new_account(user: SignUpSchema):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.post("/auth/login", responses={400: {"description": "Invalid username or password"},
-                                       500: {"description": INTERNAL_SERVER_ERROR}})
+@router.post(
+    "/auth/login",
+    responses={
+        400: {"description": "Invalid username or password"},
+        500: {"description": INTERNAL_SERVER_ERROR},
+    },
+)
 async def login_user(user: LoginSchema):
-    """Login user with username/email and password"""
-    username_or_email = user.username_or_email.strip()
-    password = user.password
+    """Login user with username/email and password."""
+    email = user.email.strip()
 
     try:
-        # Resolve username → email
-        if "@" not in username_or_email:
-            query = (
-                db.collection("users")
-                .where("username", "==", username_or_email)
-                .limit(1)
-                .get()
-            )
+        if "@" not in email:
+            query = db.collection("users").where("username", "==", email).limit(1).get()
             if not query:
                 raise HTTPException(status_code=400, detail="Invalid username or email")
             email = query[0].to_dict()["email"]
-        else:
-            email = username_or_email
 
-        # Sign in via Firebase REST API
         try:
-            user_cred = firebase.auth().sign_in_with_email_and_password(email, password)
+            user_cred = firebase.auth().sign_in_with_email_and_password(email, user.password)
         except requests.HTTPError as exc:
             raise HTTPException(status_code=400, detail="Invalid username or password") from exc
 
-        # Get Firebase user info & update last-login timestamp
         firebase_user = auth.get_user_by_email(email)
         db.collection("users").document(firebase_user.uid).update(
             {"lasted_login": datetime.now(timezone.utc)}
@@ -138,7 +125,6 @@ async def login_user(user: LoginSchema):
                 "message": "Login successful",
                 "user_id": firebase_user.uid,
                 "id_token": user_cred["idToken"],
-                # Required by frontend for silent token refresh
                 "refresh_token": user_cred["refreshToken"],
                 "expires_in": user_cred.get("expiresIn", "3600"),
             },
@@ -152,23 +138,26 @@ async def login_user(user: LoginSchema):
 
 @router.post("/auth/logout", responses={500: {"description": INTERNAL_SERVER_ERROR}})
 async def logout_user(current_user: Annotated[dict, Depends(get_current_user)]):
-    """Logout user, revokes all refresh tokens"""
+    """Logout user, revokes all refresh tokens."""
     try:
-        uid = current_user["uid"]
-        auth.revoke_refresh_tokens(uid)
+        auth.revoke_refresh_tokens(current_user["uid"])
         return JSONResponse(status_code=200, content={"message": "User logged out successfully"})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/users/me", response_model=UserSchema,
-            responses={404: {"description": USER_NOT_FOUND},
-                       500: {"description": INTERNAL_SERVER_ERROR}})
+@router.get(
+    "/users/me",
+    response_model=UserSchema,
+    responses={
+        404: {"description": USER_NOT_FOUND},
+        500: {"description": INTERNAL_SERVER_ERROR},
+    },
+)
 async def get_account_info(current_user: Annotated[dict, Depends(get_current_user)]):
-    """Get current user account info"""
+    """Get current user account info."""
     try:
-        uid = current_user["uid"]
-        user_doc = db.collection("users").document(uid).get()
+        user_doc = db.collection("users").document(current_user["uid"]).get()
         if not user_doc.exists:
             raise HTTPException(status_code=404, detail=USER_NOT_FOUND)
         return UserSchema(**user_doc.to_dict())
@@ -178,29 +167,28 @@ async def get_account_info(current_user: Annotated[dict, Depends(get_current_use
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.delete("/users/me", responses={404: {"description": USER_NOT_FOUND},
-                                       500: {"description": INTERNAL_SERVER_ERROR}})
+@router.delete(
+    "/users/me",
+    responses={
+        404: {"description": USER_NOT_FOUND},
+        500: {"description": INTERNAL_SERVER_ERROR},
+    },
+)
 async def delete_my_account(current_user: Annotated[dict, Depends(get_current_user)]):
-    """Delete current user account and all associated data"""
+    """Delete current user account and all associated data."""
     try:
         uid = current_user["uid"]
 
-        # Delete profile picture from Cloudinary (if any)
         user_doc = db.collection("users").document(uid).get()
         if user_doc.exists:
-            data = user_doc.to_dict()
-            pic = data.get("profile_picture")
+            pic = user_doc.to_dict().get("profile_picture")
             if pic and CLOUDINARY_DOMAIN in pic:
                 try:
-                    public_id = _extract_cloudinary_public_id(pic)
-                    cloudinary.uploader.destroy(public_id)
+                    cloudinary.uploader.destroy(_extract_cloudinary_public_id(pic))
                 except cloudinary.exceptions.Error as e:
                     print(f"Warning: Could not delete Cloudinary profile picture: {e}")
 
-        # Delete Firestore document
         db.collection("users").document(uid).delete()
-
-        # Delete from Firebase Auth
         auth.delete_user(uid)
 
         return JSONResponse(status_code=200, content={"message": "Account deleted successfully"})
@@ -211,13 +199,18 @@ async def delete_my_account(current_user: Annotated[dict, Depends(get_current_us
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.put("/users/me/profile", responses={400: {"description": "Username already exists"},
-                                            500: {"description": INTERNAL_SERVER_ERROR}})
+@router.put(
+    "/users/me/profile",
+    responses={
+        400: {"description": "Username already exists"},
+        500: {"description": INTERNAL_SERVER_ERROR},
+    },
+)
 async def update_profile(
     profile: UpdateProfileSchema,
     current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Update user profile fields"""
+    """Update user profile fields."""
     try:
         uid = current_user["uid"]
         update_data = profile.model_dump(exclude_unset=True, exclude_none=True)
@@ -225,12 +218,10 @@ async def update_profile(
         if not update_data:
             return JSONResponse(status_code=200, content={"message": "No changes to update"})
 
-        # Check username uniqueness if being changed
         if "username" in update_data:
-            username = update_data["username"]
             query = (
                 db.collection("users")
-                .where("username", "==", username)
+                .where("username", "==", update_data["username"])
                 .limit(1)
                 .get()
             )
@@ -246,27 +237,29 @@ async def update_profile(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error updating profile: {str(e)}")
+        print(f"Error updating profile: {e}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from e
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}") from e
 
 
-@router.put("/users/me/email", responses={400: {"description": "Email already in use"},
-                                         500: {"description": INTERNAL_SERVER_ERROR}})
+@router.put(
+    "/users/me/email",
+    responses={
+        400: {"description": "Email already in use"},
+        500: {"description": INTERNAL_SERVER_ERROR},
+    },
+)
 async def change_email(
     email_change: ChangeEmailSchema,
     current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Change user email"""
+    """Change user email."""
     try:
         uid = current_user["uid"]
-        new_email = email_change.new_email
-
-        auth.update_user(uid, email=new_email)
+        auth.update_user(uid, email=email_change.new_email)
         db.collection("users").document(uid).update(
-            {"email": new_email, "lasted_update": datetime.now(timezone.utc)}
+            {"email": email_change.new_email, "lasted_update": datetime.now(timezone.utc)}
         )
-
         return JSONResponse(status_code=200, content={"message": "Email updated successfully"})
 
     except auth.EmailAlreadyExistsError as exc:
@@ -280,10 +273,9 @@ async def change_password(
     password_change: ChangePasswordSchema,
     current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Change user password"""
+    """Change user password."""
     try:
-        uid = current_user["uid"]
-        auth.update_user(uid, password=password_change.new_password)
+        auth.update_user(current_user["uid"], password=password_change.new_password)
         return JSONResponse(status_code=200, content={"message": "Password updated successfully"})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -293,19 +285,21 @@ ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
-@router.post("/users/me/profile-picture", responses={
-    400: {"description": "Invalid file type or file too large"},
-    500: {"description": INTERNAL_SERVER_ERROR}
-})
+@router.post(
+    "/users/me/profile-picture",
+    responses={
+        400: {"description": "Invalid file type or file too large"},
+        500: {"description": INTERNAL_SERVER_ERROR},
+    },
+)
 async def upload_profile_picture(
     current_user: Annotated[dict, Depends(get_current_user)],
     file: Annotated[UploadFile, File(...)],
 ):
-    """Upload a new profile picture (stored on Cloudinary)"""
+    """Upload a new profile picture (stored on Cloudinary)."""
     try:
         uid = current_user["uid"]
 
-        # Validate MIME type
         if file.content_type not in ALLOWED_CONTENT_TYPES:
             raise HTTPException(
                 status_code=400,
@@ -313,43 +307,29 @@ async def upload_profile_picture(
             )
 
         content = await file.read()
-
-        # Validate file size
         if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=400,
-                detail="File too large. Maximum size is 5 MB",
-            )
+            raise HTTPException(status_code=400, detail="File too large. Maximum size is 5 MB")
 
-        # Delete previous profile picture from Cloudinary (if any)
         user_doc = db.collection("users").document(uid).get()
         if user_doc.exists:
             old_pic = user_doc.to_dict().get("profile_picture")
             if old_pic and CLOUDINARY_DOMAIN in old_pic:
                 try:
-                    old_public_id = _extract_cloudinary_public_id(old_pic)
-                    cloudinary.uploader.destroy(old_public_id)
+                    cloudinary.uploader.destroy(_extract_cloudinary_public_id(old_pic))
                 except (cloudinary.exceptions.Error, ValueError, IndexError, KeyError) as e:
                     print(f"Warning: Could not delete old Cloudinary picture: {e}")
 
-        # Upload new picture to Cloudinary
         upload_result = cloudinary.uploader.upload(
             io.BytesIO(content),
             folder=f"profile_pictures/{uid}",
             public_id=str(uuid.uuid4()),
             resource_type="image",
             overwrite=True,
-            # Optional: auto-crop to a square thumbnail on delivery
-            # transformation=[{"width": 400, "height": 400, "crop": "fill", "gravity": "face"}],
         )
         public_url = upload_result["secure_url"]
 
-        # Persist URL to Firestore
         db.collection("users").document(uid).update(
-            {
-                "profile_picture": public_url,
-                "lasted_update": datetime.now(timezone.utc),
-            }
+            {"profile_picture": public_url, "lasted_update": datetime.now(timezone.utc)}
         )
 
         return JSONResponse(
@@ -359,45 +339,40 @@ async def upload_profile_picture(
                 "profile_picture_url": public_url,
             },
         )
-
     except (cloudinary.exceptions.Error, KeyError, ValueError) as e:
-        print(f"Error uploading profile picture: {str(e)}")
+        print(f"Error uploading profile picture: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.delete("/users/me/profile-picture", responses={
-    404: {"description": USER_NOT_FOUND},
-    500: {"description": INTERNAL_SERVER_ERROR}
-})
+@router.delete(
+    "/users/me/profile-picture",
+    responses={
+        404: {"description": USER_NOT_FOUND},
+        500: {"description": INTERNAL_SERVER_ERROR},
+    },
+)
 async def delete_profile_picture(current_user: Annotated[dict, Depends(get_current_user)]):
-    """Delete user's current profile picture from Cloudinary"""
+    """Delete user's current profile picture from Cloudinary."""
     try:
         uid = current_user["uid"]
-
         user_doc = db.collection("users").document(uid).get()
         if not user_doc.exists:
             raise HTTPException(status_code=404, detail=USER_NOT_FOUND)
 
-        current_pic_url = user_doc.to_dict().get("profile_picture")
-
-        if current_pic_url and CLOUDINARY_DOMAIN in current_pic_url:
+        pic_url = user_doc.to_dict().get("profile_picture")
+        if pic_url and CLOUDINARY_DOMAIN in pic_url:
             try:
-                public_id = _extract_cloudinary_public_id(current_pic_url)
-                cloudinary.uploader.destroy(public_id)
+                cloudinary.uploader.destroy(_extract_cloudinary_public_id(pic_url))
             except cloudinary.exceptions.Error as e:
                 print(f"Warning: Could not delete Cloudinary picture: {e}")
 
         db.collection("users").document(uid).update(
-            {
-                "profile_picture": None,
-                "lasted_update": datetime.now(timezone.utc),
-            }
+            {"profile_picture": None, "lasted_update": datetime.now(timezone.utc)}
         )
 
-        return JSONResponse(
-            status_code=200, content={"message": "Profile picture deleted successfully"}
-        )
+        return JSONResponse(status_code=200,
+                            content={"message": "Profile picture deleted successfully"})
 
     except HTTPException:
         raise
@@ -405,49 +380,10 @@ async def delete_profile_picture(current_user: Annotated[dict, Depends(get_curre
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-def require_admin(user: Annotated[dict, Depends(get_current_user)]):
-    """Dependency — ensures the current user has the 'admin' role"""
-    try:
-        uid = user["uid"]
-        doc = db.collection("users").document(uid).get()
-        if not doc.exists:
-            raise HTTPException(status_code=404, detail=USER_NOT_FOUND)
-        user_data = doc.to_dict()
-        if not user_data or user_data.get("role") != "admin":
-            raise HTTPException(status_code=403, detail="Admin access required")
-        return user
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error in require_admin: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error checking admin status: {str(e)}") from e
-
-
-@router.get("/users", responses={500: {"description": INTERNAL_SERVER_ERROR}})
-async def list_all_users():
-    """List all users (admin only)"""
-    try:
-        users = []
-        for doc in db.collection("users").stream():
-            try:
-                user = UserSchema(**doc.to_dict())
-                users.append(user.model_dump(mode="json"))
-            except (ValueError, KeyError) as e:
-                print(f"Error processing user {doc.id}: {str(e)}")
-                continue
-
-        return JSONResponse(status_code=200, content={"users": users})
-
-    except Exception as e:
-        print(f"Error listing users: {str(e)}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from e
-
-
 class PushTokenSchema(BaseModel):
-    """Schema for push token data"""
+    """Schema for push token data."""
     push_token: str
-    platform: str          # 'ios' or 'android'
+    platform: str
     device_id: Optional[str] = None
 
 
@@ -456,10 +392,9 @@ async def register_push_token(
     token_data: PushTokenSchema,
     current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Register a push notification token for the current user"""
+    """Register a push notification token for the current user."""
     try:
-        uid = current_user["uid"]
-        db.collection("users").document(uid).update(
+        db.collection("users").document(current_user["uid"]).update(
             {
                 "push_token": token_data.push_token,
                 "push_platform": token_data.platform,
@@ -475,10 +410,9 @@ async def register_push_token(
 
 @router.delete("/users/me/push-token", responses={500: {"description": INTERNAL_SERVER_ERROR}})
 async def unregister_push_token(current_user: Annotated[dict, Depends(get_current_user)]):
-    """Unregister push notification token for the current user"""
+    """Unregister push notification token for the current user."""
     try:
-        uid = current_user["uid"]
-        db.collection("users").document(uid).update(
+        db.collection("users").document(current_user["uid"]).update(
             {
                 "push_token": None,
                 "push_platform": None,
@@ -492,12 +426,15 @@ async def unregister_push_token(current_user: Annotated[dict, Depends(get_curren
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/users/me/push-token", responses={
-    404: {"description": USER_NOT_FOUND},
-    500: {"description": INTERNAL_SERVER_ERROR}
-})
+@router.get(
+    "/users/me/push-token",
+    responses={
+        404: {"description": USER_NOT_FOUND},
+        500: {"description": INTERNAL_SERVER_ERROR},
+    },
+)
 async def get_push_token(current_user: Annotated[dict, Depends(get_current_user)]):
-    """Get the current user's push token info"""
+    """Get the current user's push token info."""
     try:
         uid = current_user["uid"]
         user_doc = db.collection("users").document(uid).get()
@@ -506,7 +443,6 @@ async def get_push_token(current_user: Annotated[dict, Depends(get_current_user)
 
         data = user_doc.to_dict()
         updated_at = data.get("push_token_updated_at")
-
         return JSONResponse(
             status_code=200,
             content={
@@ -521,3 +457,21 @@ async def get_push_token(current_user: Annotated[dict, Depends(get_current_user)
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@admin_router.get("/users", responses={500: {"description": INTERNAL_SERVER_ERROR}})
+async def list_all_users():
+    """List all users (Admin only)."""
+    try:
+        users = []
+        for doc in db.collection("users").stream():
+            try:
+                users.append(UserSchema(**doc.to_dict()).model_dump(mode="json"))
+            except (ValueError, KeyError) as e:
+                print(f"Error processing user {doc.id}: {e}")
+        return JSONResponse(status_code=200, content={"users": users})
+
+    except Exception as e:
+        print(f"Error listing users: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}") from e

@@ -1,10 +1,10 @@
 """
 Feedback Pydantic Models
 """
-from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
+from pydantic import BaseModel, Field
 
 
 class FeedbackType(str, Enum):
@@ -33,9 +33,8 @@ class FeedbackBase(BaseModel):
 
 class FeedbackCreateSchema(FeedbackBase):
     """Schema for submitting general feedback"""
-    pass
-
     class Config:
+        """Example Format"""
         json_schema_extra = {
             "example": {
                 "feedback_type": "general",
@@ -54,6 +53,7 @@ class FeedbackSchema(FeedbackBase):
     reviewed_at: Optional[datetime] = None
 
     class Config:
+        """Example Format"""
         from_attributes = True
 
 
@@ -69,9 +69,8 @@ class AIFeedbackBase(BaseModel):
 
 class AIFeedbackCreateSchema(AIFeedbackBase):
     """Schema for submitting AI correction feedback"""
-    pass
-
     class Config:
+        """Example Format"""
         json_schema_extra = {
             "example": {
                 "original_prediction": "Weaver Ant",
@@ -91,6 +90,7 @@ class AIFeedbackSchema(AIFeedbackBase):
     created_at: datetime
 
     class Config:
+        """Example Format"""
         from_attributes = True
 
 
@@ -105,9 +105,8 @@ class SpeciesCorrectionBase(BaseModel):
 
 class SpeciesCorrectionCreateSchema(SpeciesCorrectionBase):
     """Schema for submitting species data correction"""
-    pass
-
     class Config:
+        """Example Format"""
         json_schema_extra = {
             "example": {
                 "field_name": "habitat",
@@ -128,6 +127,7 @@ class SpeciesCorrectionSchema(SpeciesCorrectionBase):
     created_at: datetime
 
     class Config:
+        """Example Format"""
         from_attributes = True
 
 

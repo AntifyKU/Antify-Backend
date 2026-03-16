@@ -1,6 +1,7 @@
-from pydantic import BaseModel, EmailStr
+"""Users Model"""
 from typing import Optional, Dict
 from datetime import datetime
+from pydantic import BaseModel, EmailStr
 
 
 class SignUpSchema(BaseModel):
@@ -10,6 +11,7 @@ class SignUpSchema(BaseModel):
     password: str
 
     class Config:
+        """Example Format"""
         from_attributes = True
         json_schema_extra = {
             "example": {
@@ -21,14 +23,15 @@ class SignUpSchema(BaseModel):
 
 class LoginSchema(BaseModel):
     """User login schema"""
-    username_or_email: str
+    email: str
     password: str
 
     class Config:
+        """Example Format"""
         from_attributes = True
         json_schema_extra = {
             "example": {
-                "username_or_email": "johndoe",
+                "email": "johndoe",
                 "password": "strongpassword123"
             }
         }
@@ -46,11 +49,10 @@ class UserSchema(BaseModel):
     lasted_update: Optional[datetime] = None
     preferences: Dict[str, object] = {
         "language": "english",
-        "theme": "light",
-        "notifications_enabled": True
     }
 
     class Config:
+        """Example Format"""
         from_attributes = True
         json_schema_extra = {
             "example": {
@@ -65,8 +67,6 @@ class UserSchema(BaseModel):
                 "lasted_update": "2026-01-15T12:45:00",
                 "preferences": {
                     "language": "english",
-                    "theme": "light",
-                    "notifications_enabled": True
                 }
             }
         }
@@ -78,6 +78,7 @@ class UpdateProfileSchema(BaseModel):
     preferences: Optional[dict] = None
 
     class Config:
+        """Example Format"""
         from_attributes = True
         json_schema_extra = {
             "example": {
@@ -85,17 +86,16 @@ class UpdateProfileSchema(BaseModel):
                 "profile_picture": "http://example.com/profile.jpg",
                 "preferences": {
                     "language": "spanish",
-                    "theme": "dark",
-                    "notifications_enabled": False
                 }
             }
         }
 
 class ChangeEmailSchema(BaseModel):
     """Change email schema"""
-    new_email: EmailStr  # Changed from 'email' to 'new_email' to match backend
+    new_email: EmailStr
 
     class Config:
+        """Example Format"""
         from_attributes = True
         json_schema_extra = {
             "example": {
@@ -108,6 +108,7 @@ class ChangePasswordSchema(BaseModel):
     new_password: str
 
     class Config:
+        """Example Format"""
         from_attributes = True
         json_schema_extra = {
             "example": {

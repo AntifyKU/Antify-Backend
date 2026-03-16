@@ -27,13 +27,6 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # AI Service Configuration
 AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://localhost:8001")
 
-# News Configuration
-NEWS_REFRESH_INTERVAL_HOURS = int(os.getenv("NEWS_REFRESH_INTERVAL_HOURS", "6"))
-NEWS_RSS_SOURCES = os.getenv(
-    "NEWS_RSS_SOURCES",
-    "https://entomologytoday.org/feed/,https://phys.org/rss-feed/biology-news/"
-).split(",")
-
 # Cloudinary Configuration
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),

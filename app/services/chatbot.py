@@ -3,13 +3,14 @@ Chatbot Service
 Business logic for the ant-focused chatbot
 """
 import json
-from typing import List, Dict, Any, AsyncGenerator, Optional
+from typing import List, Dict, Any, AsyncGenerator
 
 from app.services.openrouter import openrouter_client
 
 
 # System prompt for the ant expert chatbot
-ANT_EXPERT_SYSTEM_PROMPT = """You are AntBot, an ant expert assistant for the Antify app (Thailand/Southeast Asia focus).
+ANT_EXPERT_SYSTEM_PROMPT = """
+You are AntBot, an ant expert assistant for the Antify app (Thailand/Southeast Asia focus).
 
 STRICT RULES:
 1. ONLY answer questions about ants. For non-ant topics, politely say: "I specialize in ants only. Please ask me about ants!"
@@ -34,7 +35,8 @@ Remember: SHORT answers only!"""
 
 
 # System prompt for generating contextual suggestions
-SUGGESTION_SYSTEM_PROMPT = """Based on the conversation, generate 3 SHORT follow-up questions about the ant species or topic being discussed.
+SUGGESTION_SYSTEM_PROMPT = """
+Based on the conversation, generate 3 SHORT follow-up questions about the ant species or topic being discussed.
 
 Rules:
 1. Questions must be specific to the ant/topic in the conversation
@@ -43,7 +45,8 @@ Rules:
 4. Return ONLY a JSON array of 3 strings, nothing else
 
 Example output:
-["Are Fire Ants dangerous to pets?", "How to remove Fire Ant nests?", "Where do Fire Ants live in Thailand?"]"""
+["Are Fire Ants dangerous to pets?", 
+"How to remove Fire Ant nests?", "Where do Fire Ants live in Thailand?"]"""
 
 
 # Default FAQ suggestions (shown when no context)
@@ -56,28 +59,19 @@ FAQ_SUGGESTIONS = [
 
 class ChatbotService:
     """Service for handling chatbot conversations"""
-    
+
     def __init__(self):
         self.system_prompt = ANT_EXPERT_SYSTEM_PROMPT
-    
+
     async def get_response_stream(
         self,
         content: str,
         conversation_history: List[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
-        """
-        Get streaming response from the chatbot.
-        
-        Args:
-            content: User's message
-            conversation_history: Previous messages for context
-            
-        Yields:
-            Response text chunks
-        """
+        """Get streaming response from the chatbot"""
         # Build messages list
         messages = []
-        
+
         # Add conversation history (limit to last 10 messages for context)
         if conversation_history:
             for msg in conversation_history[-10:]:
@@ -86,10 +80,10 @@ class ChatbotService:
                     "role": role,
                     "content": msg.get("content", "")
                 })
-        
+
         # Add current user message
         messages.append({"role": "user", "content": content})
-        
+
         # Stream response
         async for chunk in openrouter_client.chat_stream(
             messages=messages,
@@ -98,24 +92,14 @@ class ChatbotService:
             max_tokens=1024,
         ):
             yield chunk
-    
+
     async def get_response_with_image_stream(
         self,
         content: str,
         image_base64: str,
         mime_type: str = "image/jpeg",
     ) -> AsyncGenerator[str, None]:
-        """
-        Get streaming response for a message with an image.
-        
-        Args:
-            content: User's message/question about the image
-            image_base64: Base64 encoded image
-            mime_type: Image MIME type
-            
-        Yields:
-            Response text chunks
-        """
+        """Get streaming response for a message with an image"""
         # Add context to help with ant identification (kept short)
         enhanced_prompt = f"""User sent an image: "{content}"
 
@@ -125,7 +109,7 @@ Identify the ant briefly:
 3. One interesting fact
 
 If not an ant image, say so briefly."""
-        
+
         async for chunk in openrouter_client.chat_with_image(
             text=enhanced_prompt,
             image_base64=image_base64,
@@ -135,30 +119,23 @@ If not an ant image, say so briefly."""
             max_tokens=512,
         ):
             yield chunk
-    
+
     async def generate_suggestions(
         self,
         conversation_history: List[Dict[str, Any]],
     ) -> List[str]:
-        """
-        Generate contextual follow-up questions based on conversation.
-        
-        Args:
-            conversation_history: Previous messages for context
-            
-        Returns:
-            List of 3 suggested questions
-        """
+        """Generate contextual follow-up questions based on conversation"""
+
         if not conversation_history or len(conversation_history) < 2:
             return FAQ_SUGGESTIONS
-        
+
         # Build context from recent messages
         recent_messages = conversation_history[-6:]  # Last 3 exchanges
         context = "\n".join([
             f"{msg.get('role', 'user')}: {msg.get('content', '')}"
             for msg in recent_messages
         ])
-        
+
         try:
             # Get suggestions from LLM
             response = await openrouter_client.chat(
@@ -167,20 +144,21 @@ If not an ant image, say so briefly."""
                 temperature=0.7,
                 max_tokens=150,
             )
-            
+
             # Parse JSON response
             suggestions = json.loads(response.strip())
             if isinstance(suggestions, list) and len(suggestions) >= 3:
                 return suggestions[:3]
-        except (json.JSONDecodeError, Exception) as e:
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON for suggestions: {e}")
+        except (TypeError, ValueError) as e:
             print(f"Error generating suggestions: {e}")
-        
+
         return FAQ_SUGGESTIONS
-    
+
     def get_faq_suggestions(self) -> List[str]:
         """Get FAQ suggestions for quick questions"""
         return FAQ_SUGGESTIONS
-
 
 # Singleton instance
 chatbot_service = ChatbotService()
