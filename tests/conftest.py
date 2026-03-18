@@ -3,19 +3,16 @@ import sys
 from unittest.mock import MagicMock
 
 class _ExpiredIdTokenError(Exception):
-    def __init__(self, message="expired"):
+    def __init__(self, message="expired", _cause=None, _http_response=None):
         super().__init__(message)
-
 
 class _RevokedIdTokenError(Exception):
-    def __init__(self, message="revoked"):
+    def __init__(self, message="revoked", _cause=None, _http_response=None):
         super().__init__(message)
-
 
 class _InvalidIdTokenError(Exception):
-    def __init__(self, message="invalid"):
+    def __init__(self, message="invalid", _cause=None, _http_response=None):
         super().__init__(message)
-
 
 # Build firebase_admin.auth stub that carries the real exception classes
 auth_stub = MagicMock()

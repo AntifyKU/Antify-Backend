@@ -194,6 +194,8 @@ class TestVerifyFirebaseToken:
     def test_invalid_token(self, mock_auth):
         """Should raise 401 for invalid token."""
         fb_auth = sys.modules["firebase_admin.auth"]
+        mock_auth.ExpiredIdTokenError = fb_auth.ExpiredIdTokenError
+        mock_auth.RevokedIdTokenError = fb_auth.RevokedIdTokenError
         mock_auth.InvalidIdTokenError = fb_auth.InvalidIdTokenError
         mock_auth.verify_id_token.side_effect = fb_auth.InvalidIdTokenError("invalid")
 
