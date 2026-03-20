@@ -4,19 +4,26 @@ Business logic for the ant-focused chatbot
 """
 import json
 from typing import List, Dict, Any, AsyncGenerator
+import re
 
+from firebase_admin import firestore
 from app.services.openrouter import openrouter_client
+
+db = firestore.client()
+SPECIES_COLLECTION = "species"
 
 
 # System prompt for the ant expert chatbot
-ANT_EXPERT_SYSTEM_PROMPT = """
-You are AntBot, an ant expert assistant for the Antify app (Thailand/Southeast Asia focus).
+ANT_EXPERT_SYSTEM_PROMPT = """You are AntBot,
+an ant expert assistant for the Antify app (Thailand/Southeast Asia focus).
 
 STRICT RULES:
 1. ONLY answer questions about ants. For non-ant topics, politely say: "I specialize in ants only. Please ask me about ants!"
 2. Keep responses SHORT (2-4 sentences max). Be concise and direct.
 3. Use simple language. Avoid long explanations.
 4. Include scientific names in parentheses when mentioning species.
+5. IMPORTANT: You MUST answer in the exact same language as the user's prompt (e.g., if asked in Thai, answer in Thai. If asked in English, answer in English).
+6. DO NOT use markdown formatting (like **bold** or *italics*). Use plain text ONLY.
 
 Your expertise: ant identification, behavior, ecology, habitats, colonies, pest control.
 
@@ -35,8 +42,8 @@ Remember: SHORT answers only!"""
 
 
 # System prompt for generating contextual suggestions
-SUGGESTION_SYSTEM_PROMPT = """
-Based on the conversation, generate 3 SHORT follow-up questions about the ant species or topic being discussed.
+SUGGESTION_SYSTEM_PROMPT = """Based on the conversation,
+generate 3 SHORT follow-up questions about the ant species or topic being discussed.
 
 Rules:
 1. Questions must be specific to the ant/topic in the conversation
@@ -45,7 +52,7 @@ Rules:
 4. Return ONLY a JSON array of 3 strings, nothing else
 
 Example output:
-["Are Fire Ants dangerous to pets?", 
+["Are Fire Ants dangerous to pets?",
 "How to remove Fire Ant nests?", "Where do Fire Ants live in Thailand?"]"""
 
 
@@ -63,12 +70,56 @@ class ChatbotService:
     def __init__(self):
         self.system_prompt = ANT_EXPERT_SYSTEM_PROMPT
 
+    def _get_relevant_ant_context(self, query: str) -> str:
+        """Fetch ant details from Firebase if query matches ant names/tags."""
+        try:
+            # Simple keyword extraction: words longer than 3 chars
+            words = set(re.findall(r'\b\w{3,}\b', query.lower()))
+            if not words:
+                return ""
+
+            species_ref = db.collection(SPECIES_COLLECTION)
+            docs = species_ref.stream()
+
+            matches = []
+            for doc in docs:
+                data = doc.to_dict()
+                name = data.get("name", "").lower()
+                scientific = data.get("scientific_name", "").lower()
+                tags = [t.lower() for t in data.get("tags", [])]
+
+                # Check for overlap
+                text_to_search = name + " " + scientific + " " + " ".join(tags)
+                if any(w in text_to_search for w in words):
+                    matches.append(data)
+
+                if len(matches) >= 3:
+                    break
+
+            if not matches:
+                return ""
+
+            context_parts = ["\n[Database Context about mentioned ants]:"]
+            for m in matches:
+                context_parts.append(
+                    f"- {m.get('name')} ({m.get('scientific_name')}): "
+                    f"About: {m.get('about', '')}. "
+                    f"Habitat: {', '.join(m.get('habitat', []))}. "
+                    f"Behavior: {m.get('behavior', '')}."
+                )
+            return "\n".join(context_parts)
+        except (ValueError, TypeError) as e:
+            print(f"Error fetching RAG context: {e}")
+            return ""
+
     async def get_response_stream(
         self,
         content: str,
         conversation_history: List[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
-        """Get streaming response from the chatbot"""
+        """
+        Get streaming response from the chatbot.
+        """
         # Build messages list
         messages = []
 
@@ -81,13 +132,17 @@ class ChatbotService:
                     "content": msg.get("content", "")
                 })
 
+        # Get context from Firebase based on latest message
+        rag_context = self._get_relevant_ant_context(content)
+        final_system_prompt = self.system_prompt + rag_context
+
         # Add current user message
         messages.append({"role": "user", "content": content})
 
         # Stream response
         async for chunk in openrouter_client.chat_stream(
             messages=messages,
-            system_prompt=self.system_prompt,
+            system_prompt=final_system_prompt,
             temperature=0.7,
             max_tokens=1024,
         ):
@@ -99,7 +154,9 @@ class ChatbotService:
         image_base64: str,
         mime_type: str = "image/jpeg",
     ) -> AsyncGenerator[str, None]:
-        """Get streaming response for a message with an image"""
+        """
+        Get streaming response for a message with an image.
+        """
         # Add context to help with ant identification (kept short)
         enhanced_prompt = f"""User sent an image: "{content}"
 
@@ -110,11 +167,15 @@ Identify the ant briefly:
 
 If not an ant image, say so briefly."""
 
+        # Get context from Firebase based on current question
+        rag_context = self._get_relevant_ant_context(content)
+        final_system_prompt = self.system_prompt + rag_context
+
         async for chunk in openrouter_client.chat_with_image(
             text=enhanced_prompt,
             image_base64=image_base64,
             mime_type=mime_type,
-            system_prompt=self.system_prompt,
+            system_prompt=final_system_prompt,
             temperature=0.7,
             max_tokens=512,
         ):
@@ -124,8 +185,9 @@ If not an ant image, say so briefly."""
         self,
         conversation_history: List[Dict[str, Any]],
     ) -> List[str]:
-        """Generate contextual follow-up questions based on conversation"""
-
+        """
+        Generate contextual follow-up questions based on conversation.
+        """
         if not conversation_history or len(conversation_history) < 2:
             return FAQ_SUGGESTIONS
 
@@ -150,8 +212,6 @@ If not an ant image, say so briefly."""
             if isinstance(suggestions, list) and len(suggestions) >= 3:
                 return suggestions[:3]
         except json.JSONDecodeError as e:
-            print(f"Error decoding JSON for suggestions: {e}")
-        except (TypeError, ValueError) as e:
             print(f"Error generating suggestions: {e}")
 
         return FAQ_SUGGESTIONS
@@ -159,6 +219,7 @@ If not an ant image, say so briefly."""
     def get_faq_suggestions(self) -> List[str]:
         """Get FAQ suggestions for quick questions"""
         return FAQ_SUGGESTIONS
+
 
 # Singleton instance
 chatbot_service = ChatbotService()
