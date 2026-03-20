@@ -1,8 +1,13 @@
 """
 AI Identification API Routes
-Proxy to the AI microservice for ant species identification
 """
+import io
+import uuid
+import logging
 from typing import Annotated
+
+import cloudinary
+import cloudinary.uploader
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from firebase_admin import firestore as fs
 from firebase_admin.exceptions import FirebaseError
@@ -13,9 +18,10 @@ from app.models.identification import (
     ClassificationResponse,
     DetectionBox,
     DetectionResponse,
-    Base64ImageRequest
+    Base64ImageRequest,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _ERR_AI_UNAVAILABLE = "AI service is currently unavailable. Please try again later."
@@ -26,21 +32,22 @@ _RESPONSES_400_503_500 = {
     503: {"description": "AI service unavailable"},
     500: {"description": "Internal server error"},
 }
-
 _RESPONSES_503_500 = {
     503: {"description": "AI service unavailable"},
     500: {"description": "Internal server error"},
 }
 
+_CLOUDINARY_FOLDER = "identified_ants"
+
 
 def _require_image(file: UploadFile) -> None:
-    """Raise HTTP 400 if the upload is not an image"""
+    """Raise HTTP 400 if the upload is not an image."""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail=_ERR_INVALID_FILE)
 
 
 def _raise_from_ai_error(e: Exception, action: str) -> None:
-    """Convert AI-client exceptions into appropriate HTTP errors"""
+    """Convert AI-client exceptions into appropriate HTTP errors."""
     error_msg = str(e)
     if "ConnectError" in error_msg or "Connection refused" in error_msg:
         raise HTTPException(status_code=503, detail=_ERR_AI_UNAVAILABLE) from e
@@ -57,6 +64,19 @@ def _build_predictions(raw: dict) -> list[PredictionResult]:
             species_id=pred.get("species_id"),
         )
         for i, pred in enumerate(raw_preds, 1)
+    ]
+
+
+def _build_plain_predictions(result: dict) -> list[dict]:
+    raw = result.get("top_predictions", result.get("top5_predictions", []))
+    return [
+        {
+            "rank":       pred.get("rank", i),
+            "class_name": pred.get("class_name", pred.get("species", "Unknown")),
+            "confidence": pred.get("confidence", 0.0),
+            "species_id": pred.get("species_id"),
+        }
+        for i, pred in enumerate(raw, 1)
     ]
 
 
@@ -104,32 +124,51 @@ def _lookup_species(scientific_name: str) -> dict | None:
             species["id"] = doc.id
             return _normalise_timestamps(species)
     except FirebaseError as e:
-        print(f"[identify/species/details] Firestore lookup error: {e}")
+        logger.error("[identify] Firestore species lookup error: %s", e)
     return None
-
-
-def _build_plain_predictions(result: dict) -> list[dict]:
-    """Build a plain-dict prediction list from a raw AI result."""
-    raw = result.get("top_predictions", result.get("top5_predictions", []))
-    return [
-        {
-            "rank": pred.get("rank", i),
-            "class_name": pred.get("class_name", pred.get("species", "Unknown")),
-            "confidence": pred.get("confidence", 0.0),
-            "species_id": pred.get("species_id"),
-        }
-        for i, pred in enumerate(raw, 1)
-    ]
 
 
 def _ai_rejected(result: dict) -> dict:
     """Return a standardised 'not an ant' response payload."""
     return {
-        "success": False,
-        "message": result.get("message", "Image was not recognized as an ant."),
-        "predictions": [],
+        "success":      False,
+        "message":      result.get("message", "Image was not recognized as an ant."),
+        "predictions":  [],
         "species_info": None,
     }
+
+
+def _upload_to_cloudinary(
+    content: bytes,
+    species_name: str,
+    confidence: float,
+) -> str | None:
+    """
+    Upload image bytes to Cloudinary under identified_ants/<species_name>/.
+    Tags the asset with the species name and confidence score.
+    Returns the secure URL, or None on failure (best-effort).
+    """
+    try:
+        # Sanitise species name for use as a folder path segment
+        safe_name = species_name.replace(" ", "_").replace("/", "-")
+        public_id = f"{_CLOUDINARY_FOLDER}/{safe_name}/{uuid.uuid4()}"
+
+        result = cloudinary.uploader.upload(
+            io.BytesIO(content),
+            public_id=public_id,
+            resource_type="image",
+            overwrite=False,
+            context={
+                "species":    species_name,
+                "confidence": f"{confidence:.4f}",
+            },
+            tags=[safe_name, "identified_ant"],
+        )
+        return result["secure_url"]
+
+    except (cloudinary.exceptions.Error, OSError, IOError) as exc:
+        logger.warning("[identify] Cloudinary upload failed: %s", exc)
+        return None
 
 
 @router.get("/identify/health")
@@ -157,8 +196,8 @@ async def identify_ant(
     top_k: Annotated[int, Query(ge=1, le=10, description="Number of top predictions")] = 5,
 ):
     """
-    Identify ant species from an uploaded image; 
-    returns top predictions with confidence scores
+    Identify ant species from an uploaded image.
+    Returns top predictions with confidence scores.
     """
     _require_image(file)
     try:
@@ -242,13 +281,16 @@ async def identify_species_details(
     """
     Identify ant species AND return full species info from Firestore.
 
-    Combines AI classification with database lookup in a single call:
-    1. Sends image to AI model server for classification
-    2. Takes the top prediction (scientific name)
-    3. Queries Firestore 'species' collection for matching species
-    4. Returns both predictions and full species data
+    On success (species identified), the image is uploaded to Cloudinary
+    under identified_ants/<species_name>/ with species and confidence metadata.
+    Images that cannot be identified are NOT uploaded.
     """
     _require_image(file)
+
+    # Read once, ai_client.classify_image() does its own read+seek internally,
+    # so we read here first, seek back, then pass the bytes to Cloudinary after.
+    file_content = await file.read()
+    await file.seek(0)
 
     try:
         result = await ai_client.classify_image(
@@ -259,23 +301,36 @@ async def identify_species_details(
     except RuntimeError as e:
         _raise_from_ai_error(e, "Identification")
 
+    # AI could not identify the image, do not upload
     if not result.get("success", True):
         return _ai_rejected(result)
 
-    predictions = _build_plain_predictions(result)
+    predictions         = _build_plain_predictions(result)
     top_scientific_name = result.get(
         "top_prediction",
         predictions[0]["class_name"] if predictions else None,
     )
+    top_confidence = result.get(
+        "top_confidence",
+        predictions[0]["confidence"] if predictions else 0.0,
+    )
+    species_info = _lookup_species(top_scientific_name) if top_scientific_name else None
+
+    # Upload to Cloudinary (best-effort, never blocks the response)
+    image_url: str | None = None
+    if top_scientific_name and top_confidence >= 0.80:
+        image_url = _upload_to_cloudinary(
+            content=file_content,
+            species_name=top_scientific_name,
+            confidence=top_confidence,
+        )
 
     return {
-        "success": True,
+        "success":        True,
         "top_prediction": top_scientific_name,
-        "top_confidence": result.get(
-            "top_confidence",
-            predictions[0]["confidence"] if predictions else 0.0,
-        ),
-        "predictions": predictions,
-        "species_info": _lookup_species(top_scientific_name) if top_scientific_name else None,
-        "model": result.get("model"),
+        "top_confidence": top_confidence,
+        "predictions":    predictions,
+        "species_info":   species_info,
+        "image_url":      image_url,
+        "model":          result.get("model"),
     }

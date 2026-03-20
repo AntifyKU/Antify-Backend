@@ -39,7 +39,7 @@ class FeedbackCreateSchema(FeedbackBase):
             "example": {
                 "feedback_type": "general",
                 "message": "Great app for identifying ants! I learned a lot about local species.",
-                "rating": 5
+                "rating": 5,
             }
         }
 
@@ -59,25 +59,30 @@ class FeedbackSchema(FeedbackBase):
 
 class AIFeedbackBase(BaseModel):
     """Base AI improvement feedback schema"""
-    original_prediction: str = Field(..., description="What the AI predicted")
-    correct_species_id: str = Field(..., description="ID of the correct species")
-    correct_species_name: str = Field(..., description="Name of the correct species")
-    confidence_was: Optional[float] = Field(None, description="Original confidence score")
-    image_base64: Optional[str] = Field(None, description="Base64 image for reference")
-    additional_notes: Optional[str] = None
+    original_prediction: str = Field(..., description="Species name the AI predicted")
+    confidence_was: Optional[float] = Field(None, ge=0.0, le=1.0,
+                                            description="Original confidence score (0–1)")
+    is_correct: bool = Field(..., description="Whether the AI prediction was correct")
+    additional_notes: Optional[str] = Field(None, max_length=2000,
+                                            description="Optional notes from the user")
+    rating: Optional[int] = Field(None, ge=1, le=5, description="Quality rating 1-5")
 
 
 class AIFeedbackCreateSchema(AIFeedbackBase):
-    """Schema for submitting AI correction feedback"""
+    """Schema for submitting AI identification feedback.
+
+    Users confirm whether the prediction was correct and can add free-text notes.
+    No species correction is required — incorrect predictions are flagged for review.
+    """
     class Config:
         """Example Format"""
         json_schema_extra = {
             "example": {
-                "original_prediction": "Weaver Ant",
-                "correct_species_id": "3",
-                "correct_species_name": "Red Imported Fire Ant",
+                "original_prediction": "Paratrechina longicornis",
                 "confidence_was": 0.85,
-                "additional_notes": "The color was more red than orange"
+                "is_correct": False,
+                "additional_notes": "The ant was darker and had a different node shape.",
+                "rating": 3,
             }
         }
 
@@ -113,7 +118,7 @@ class SpeciesCorrectionCreateSchema(SpeciesCorrectionBase):
                 "current_value": "Tropical Forests",
                 "suggested_value": "Tropical Forests, Urban Areas",
                 "reason": "This species is commonly found in urban gardens as well",
-                "source": "Personal observation + iNaturalist records"
+                "source": "Personal observation + iNaturalist records",
             }
         }
 

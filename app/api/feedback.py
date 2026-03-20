@@ -19,7 +19,7 @@ from app.models.feedback import (
     SpeciesCorrectionSchema,
     FeedbackListResponse,
 )
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_user, get_optional_user
 
 # Public routes
 router = APIRouter()
@@ -95,7 +95,7 @@ def _strip_base64(items: list[dict]) -> list[dict]:
 @router.post("/feedback", response_model=FeedbackSchema, responses=_R500)
 async def submit_feedback(
     feedback: FeedbackCreateSchema,
-    current_user: Annotated[Optional[dict], Depends(get_current_user)],
+    current_user: Annotated[Optional[dict], Depends(get_optional_user)],
 ):
     """Submit general app feedback."""
     try:
@@ -119,7 +119,7 @@ async def submit_feedback(
 @router.post("/feedback/ai", response_model=AIFeedbackSchema, responses=_R500)
 async def submit_ai_feedback(
     feedback: AIFeedbackCreateSchema,
-    current_user: Annotated[dict, Depends(get_current_user)],
+    current_user: Annotated[Optional[dict], Depends(get_optional_user)],
 ):
     """
     Submit AI identification correction feedback.
@@ -138,7 +138,7 @@ async def submit_ai_feedback(
 
         feedback_data.update({
             "id": feedback_id,
-            "user_id": current_user.get("uid"),
+            "user_id": current_user.get("uid") if current_user else None,
             "status": FeedbackStatus.PENDING.value,
             "created_at": _now_utc(),
         })

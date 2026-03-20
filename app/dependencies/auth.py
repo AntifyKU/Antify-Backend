@@ -1,5 +1,5 @@
 """ Firebase authentication utilities """
-from typing import Annotated
+from typing import Annotated, Optional
 from fastapi import Header, HTTPException, Depends
 from firebase_admin import auth, firestore
 
@@ -81,3 +81,15 @@ def require_admin(current_user: Annotated[dict, Depends(get_current_user)]) -> d
         raise HTTPException(status_code=403, detail="Admin access required")
 
     return current_user
+
+def get_optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[dict]:
+    """Dependency: return decoded token if provided, or None if no auth header."""
+    if not authorization:
+        return None
+    if not authorization.startswith(BEARER_PREFIX):
+        return None
+    token = authorization.removeprefix(BEARER_PREFIX).strip()
+    try:
+        return _verify_firebase_token(token)
+    except HTTPException:
+        return None
