@@ -1,4 +1,3 @@
-
 # Choose a base image
 FROM python:3.11-slim
 
@@ -12,5 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code to the container
 COPY . .
 
-# Command to run the application
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Command to run the application (PORT defaults to 8080 for Cloud Run)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
