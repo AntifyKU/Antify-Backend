@@ -59,6 +59,7 @@ class SpeciesCreateSchema(SpeciesBase):
 
 class SpeciesUpdateSchema(BaseModel):
     """Schema for updating species (all fields optional)"""
+    model_config = ConfigDict(extra="allow")
     name: Optional[str] = None
     scientific_name: Optional[str] = None
     classification: Optional[ClassificationSchema] = None

@@ -101,6 +101,21 @@ def test_admin_update_species(client, override_admin_uid, firestore_db):
     assert r.json()["name"] == "New"
 
 
+def test_admin_update_species_allows_extended_fields(client, override_admin_uid, firestore_db):
+    sid, data = species_document(doc_id="su2", name="Old2", scientific_name="Oldius secondus")
+    firestore_db.collection("species").document(sid).set(data)
+    payload = {
+        "distribution_v2": {"provinces": ["Bangkok"]},
+        "accepted_taxon": {"scientific_name": "Oldius secondus", "rank": "species"},
+        "risk": {"medical_importance": "low"},
+    }
+    r = client.put(f"/api/species/{sid}", json=payload)
+    assert r.status_code == 200
+    assert r.json()["distribution_v2"]["provinces"] == ["Bangkok"]
+    assert r.json()["accepted_taxon"]["rank"] == "species"
+    assert r.json()["risk"]["medical_importance"] == "low"
+
+
 def test_admin_delete_species(client, override_admin_uid, firestore_db):
     sid, data = species_document(doc_id="sd", name="D", scientific_name="D. d")
     firestore_db.collection("species").document(sid).set(data)
