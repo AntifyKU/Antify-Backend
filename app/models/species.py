@@ -1,9 +1,9 @@
 """
 Species Pydantic Models
 """
-from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class ClassificationSchema(BaseModel):
@@ -15,6 +15,7 @@ class ClassificationSchema(BaseModel):
 
 class SpeciesBase(BaseModel):
     """Base species schema with common fields"""
+    model_config = ConfigDict(extra="allow")
     name: str = Field(..., description="Common name of the ant species")
     scientific_name: str = Field(..., description="Scientific name (Latin)")
     classification: ClassificationSchema
@@ -31,9 +32,9 @@ class SpeciesBase(BaseModel):
 
 class SpeciesCreateSchema(SpeciesBase):
     """Schema for creating a new species"""
-    pass
 
     class Config:
+        """Example Format"""
         json_schema_extra = {
             "example": {
                 "name": "Weaver Ant",
@@ -58,6 +59,7 @@ class SpeciesCreateSchema(SpeciesBase):
 
 class SpeciesUpdateSchema(BaseModel):
     """Schema for updating species (all fields optional)"""
+    model_config = ConfigDict(extra="allow")
     name: Optional[str] = None
     scientific_name: Optional[str] = None
     classification: Optional[ClassificationSchema] = None
@@ -79,6 +81,7 @@ class SpeciesSchema(SpeciesBase):
     updated_at: Optional[datetime] = None
 
     class Config:
+        """Example Format"""
         from_attributes = True
 
 
@@ -87,4 +90,4 @@ class SpeciesListResponse(BaseModel):
     species: List[SpeciesSchema]
     total: int
     page: int = 1
-    limit: int = 50
+    limit: int = 500

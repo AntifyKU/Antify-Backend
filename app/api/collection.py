@@ -2,19 +2,18 @@
 Collection and Favorites API Routes
 User's personal ant collection and favorites management
 """
-from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional
-from datetime import datetime
+from typing import Annotated
+from datetime import datetime, timezone
 import uuid
-
+from fastapi import APIRouter, HTTPException, Depends, Query
+from google.api_core.exceptions import GoogleAPICallError, RetryError
+from google.cloud.firestore import Client, Query as FirestoreQuery, ArrayRemove
 from firebase_admin import firestore
+
 from app.models.collection import (
     CollectionItemCreate,
     CollectionItemSchema,
     CollectionListResponse,
-    FavoriteItemCreate,
-    FavoriteItemSchema,
-    FavoriteListResponse,
     FolderCreate,
     FolderUpdate,
     FolderSchema,
@@ -24,17 +23,73 @@ from app.models.collection import (
 from app.dependencies.auth import get_current_user
 
 router = APIRouter()
-db = firestore.client()
+db: Client = firestore.client()
 
 USERS_COLLECTION = "users"
 COLLECTION_SUBCOLLECTION = "collection"
-FAVORITES_SUBCOLLECTION = "favorites"
 FOLDERS_SUBCOLLECTION = "folders"
 SPECIES_COLLECTION = "species"
+COLLECTION_ITEM_LABEL = "Collection item"
+APP_JSON = "application/json"
 
 
-async def get_species_details(species_id: str) -> dict:
-    """Fetch species details for enriching collection/favorite items"""
+_R500 = {
+    500: {"description": "Internal Server Error",
+          "content": {APP_JSON: {"example": {"detail": "An unexpected error occurred."}}}},
+}
+_R404_500 = {
+    404: {"description": "Resource not found",
+          "content": {APP_JSON: {"example": {"detail": "<Resource> not found"}}}},
+    **_R500,
+}
+_R400_404_500 = {
+    400: {"description": "Bad request",
+          "content": {APP_JSON: {"example": {"detail": "Invalid request."}}}},
+    **_R404_500,
+}
+
+
+def _now_utc() -> datetime:
+    """Return the current UTC time as a timezone-aware datetime."""
+    return datetime.now(tz=timezone.utc)
+
+
+def _user_collection_ref(user_id: str) -> FirestoreQuery:
+    """Reference to a user's collection subcollection."""
+    return (
+        db.collection(USERS_COLLECTION)
+        .document(user_id)
+        .collection(COLLECTION_SUBCOLLECTION)
+    )
+
+
+def _user_folders_ref(user_id: str) -> FirestoreQuery:
+    """Reference to a user's folders subcollection."""
+    return (
+        db.collection(USERS_COLLECTION)
+        .document(user_id)
+        .collection(FOLDERS_SUBCOLLECTION)
+    )
+
+
+def _get_doc_or_404(ref, label: str):
+    """Fetch a Firestore document reference or raise HTTP 404."""
+    doc = ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail=f"{label} not found")
+    return doc
+
+
+def _verify_folders_exist(user_id: str, folder_ids: list[str]) -> None:
+    """Raise HTTP 404 if any of the given folder IDs do not exist for this user."""
+    for folder_id in folder_ids:
+        folder_ref = _user_folders_ref(user_id).document(folder_id)
+        if not folder_ref.get().exists:
+            raise HTTPException(status_code=404, detail=f"Folder {folder_id} not found")
+
+
+def _get_species_details(species_id: str) -> dict:
+    """Fetch species details for enriching collection items. Returns {} on miss or error."""
     try:
         doc = db.collection(SPECIES_COLLECTION).document(species_id).get()
         if doc.exists:
@@ -45,641 +100,327 @@ async def get_species_details(species_id: str) -> dict:
                 "species_image": data.get("image"),
                 "species_about": data.get("about"),
             }
-    except Exception:
+    except (GoogleAPICallError, RetryError, ValueError, TypeError):
         pass
     return {}
 
 
-# ============== COLLECTION ENDPOINTS ==============
-
-@router.get("/users/me/collection", response_model=CollectionListResponse)
+@router.get("/users/me/collection", response_model=CollectionListResponse, responses=_R500)
 async def get_my_collection(
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Get current user's ant collection"""
+    """Get current user's ant collection."""
     try:
         user_id = current_user["uid"]
-        collection_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
+        docs = (
+            _user_collection_ref(user_id)
+            .order_by("added_at", direction=FirestoreQuery.DESCENDING)
+            .stream()
         )
-        
-        docs = collection_ref.order_by("added_at", direction=firestore.Query.DESCENDING).stream()
-        
+
         items = []
         for doc in docs:
             data = doc.to_dict()
             data["id"] = doc.id
             data["user_id"] = user_id
-            # Ensure folder_ids is present (for backwards compatibility)
-            if "folder_ids" not in data:
-                data["folder_ids"] = []
-            
-            # Enrich with species details
-            species_details = await get_species_details(data.get("species_id", ""))
-            data.update(species_details)
-            
+            data.setdefault("folder_ids", [])
+            data.update(_get_species_details(data.get("species_id", "")))
             items.append(data)
-        
+
         return CollectionListResponse(items=items, total=len(items))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.post("/users/me/collection", response_model=CollectionItemSchema)
+@router.post(
+    "/users/me/collection",
+    response_model=CollectionItemSchema,
+    responses=_R400_404_500,
+)
 async def add_to_collection(
     item: CollectionItemCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Add a species to user's collection"""
+    """Add a species to user's collection."""
     try:
         user_id = current_user["uid"]
-        
-        # Verify species exists
-        species_doc = db.collection(SPECIES_COLLECTION).document(item.species_id).get()
-        if not species_doc.exists:
-            raise HTTPException(status_code=404, detail="Species not found")
-        
-        # Check if already in collection
+
+        species_ref = db.collection(SPECIES_COLLECTION).document(item.species_id)
+        _get_doc_or_404(species_ref, "Species")
+
         existing = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
+            _user_collection_ref(user_id)
             .where("species_id", "==", item.species_id)
             .limit(1)
             .stream()
         )
-        if len(list(existing)) > 0:
+        if any(True for _ in existing):
             raise HTTPException(status_code=400, detail="Species already in collection")
-        
-        # Create collection item
+
         item_id = str(uuid.uuid4())
-        now = datetime.utcnow()
-        
-        item_data = item.model_dump()
-        item_data["added_at"] = now
-        
-        (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
-            .document(item_id)
-            .set(item_data)
-        )
-        
-        # Return with species details
+        item_data = {**item.model_dump(), "added_at": _now_utc()}
+        _user_collection_ref(user_id).document(item_id).set(item_data)
+
         item_data["id"] = item_id
         item_data["user_id"] = user_id
-        species_details = await get_species_details(item.species_id)
-        item_data.update(species_details)
-        
+        item_data.update(_get_species_details(item.species_id))
+
         return item_data
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.delete("/users/me/collection/{item_id}")
+@router.delete("/users/me/collection/{item_id}", responses=_R404_500)
 async def remove_from_collection(
     item_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Remove a species from user's collection"""
+    """Remove a species from user's collection."""
     try:
         user_id = current_user["uid"]
-        
-        doc_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
-            .document(item_id)
-        )
-        
-        doc = doc_ref.get()
-        if not doc.exists:
-            raise HTTPException(status_code=404, detail="Collection item not found")
-        
+        doc_ref = _user_collection_ref(user_id).document(item_id)
+        _get_doc_or_404(doc_ref, COLLECTION_ITEM_LABEL)
         doc_ref.delete()
-        
         return {"message": "Item removed from collection"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-# ============== FOLDER ENDPOINTS ==============
-
-@router.get("/users/me/folders", response_model=FolderListResponse)
+@router.get("/users/me/folders", response_model=FolderListResponse, responses=_R500)
 async def get_my_folders(
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Get current user's folders with item counts"""
+    """Get current user's folders with item counts."""
     try:
         user_id = current_user["uid"]
-        folders_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FOLDERS_SUBCOLLECTION)
+
+        folder_docs = (
+            _user_folders_ref(user_id)
+            .order_by("created_at", direction=FirestoreQuery.DESCENDING)
+            .stream()
         )
-        
-        docs = folders_ref.order_by("created_at", direction=firestore.Query.DESCENDING).stream()
-        
-        # Get all collection items to count items per folder
-        collection_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
-        )
-        collection_docs = list(collection_ref.stream())
-        
-        # Count items per folder
-        folder_item_counts = {}
-        for col_doc in collection_docs:
-            col_data = col_doc.to_dict()
-            folder_ids = col_data.get("folder_ids", [])
-            for folder_id in folder_ids:
-                folder_item_counts[folder_id] = folder_item_counts.get(folder_id, 0) + 1
-        
+
+        # Count items per folder in a single pass
+        folder_item_counts: dict[str, int] = {}
+        for col_doc in _user_collection_ref(user_id).stream():
+            for fid in col_doc.to_dict().get("folder_ids", []):
+                folder_item_counts[fid] = folder_item_counts.get(fid, 0) + 1
+
         folders = []
-        for doc in docs:
+        for doc in folder_docs:
             data = doc.to_dict()
             data["id"] = doc.id
             data["user_id"] = user_id
             data["item_count"] = folder_item_counts.get(doc.id, 0)
             folders.append(data)
-        
+
         return FolderListResponse(folders=folders, total=len(folders))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.post("/users/me/folders", response_model=FolderSchema)
+@router.post(
+    "/users/me/folders",
+    response_model=FolderSchema,
+    responses=_R400_404_500,
+)
 async def create_folder(
     folder: FolderCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Create a new folder"""
+    """Create a new folder."""
     try:
         user_id = current_user["uid"]
-        
-        # Check if folder with same name already exists
+
         existing = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FOLDERS_SUBCOLLECTION)
+            _user_folders_ref(user_id)
             .where("name", "==", folder.name)
             .limit(1)
             .stream()
         )
-        if len(list(existing)) > 0:
+        if any(True for _ in existing):
             raise HTTPException(status_code=400, detail="Folder with this name already exists")
-        
-        # Create folder
+
         folder_id = str(uuid.uuid4())
-        now = datetime.utcnow()
-        
-        folder_data = folder.model_dump()
-        folder_data["created_at"] = now
-        folder_data["updated_at"] = now
-        
-        (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FOLDERS_SUBCOLLECTION)
-            .document(folder_id)
-            .set(folder_data)
-        )
-        
-        folder_data["id"] = folder_id
-        folder_data["user_id"] = user_id
-        folder_data["item_count"] = 0
-        
-        return folder_data
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        now = _now_utc()
+        folder_data = {**folder.model_dump(), "created_at": now, "updated_at": now}
+        _user_folders_ref(user_id).document(folder_id).set(folder_data)
+
+        return {**folder_data, "id": folder_id, "user_id": user_id, "item_count": 0}
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.put("/users/me/folders/{folder_id}", response_model=FolderSchema)
+@router.put(
+    "/users/me/folders/{folder_id}",
+    response_model=FolderSchema,
+    responses=_R400_404_500,
+)
 async def update_folder(
     folder_id: str,
     folder_update: FolderUpdate,
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Update a folder"""
+    """Update a folder."""
     try:
         user_id = current_user["uid"]
-        
-        doc_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FOLDERS_SUBCOLLECTION)
-            .document(folder_id)
-        )
-        
-        doc = doc_ref.get()
-        if not doc.exists:
-            raise HTTPException(status_code=404, detail="Folder not found")
-        
-        # Check if new name conflicts with existing folder
+        doc_ref = _user_folders_ref(user_id).document(folder_id)
+        _get_doc_or_404(doc_ref, "Folder")
+
         update_data = {k: v for k, v in folder_update.model_dump().items() if v is not None}
-        
+
         if "name" in update_data:
-            existing = (
-                db.collection(USERS_COLLECTION)
-                .document(user_id)
-                .collection(FOLDERS_SUBCOLLECTION)
+            existing = list(
+                _user_folders_ref(user_id)
                 .where("name", "==", update_data["name"])
                 .limit(1)
                 .stream()
             )
-            existing_list = list(existing)
-            if len(existing_list) > 0 and existing_list[0].id != folder_id:
+            if existing and existing[0].id != folder_id:
                 raise HTTPException(status_code=400, detail="Folder with this name already exists")
-        
-        update_data["updated_at"] = datetime.utcnow()
+
+        update_data["updated_at"] = _now_utc()
         doc_ref.update(update_data)
-        
-        # Get updated document
-        updated_doc = doc_ref.get()
-        folder_data = updated_doc.to_dict()
+
+        folder_data = doc_ref.get().to_dict()
         folder_data["id"] = folder_id
         folder_data["user_id"] = user_id
-        
-        # Count items in this folder
-        collection_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
+        folder_data["item_count"] = sum(
+            1 for _ in
+            _user_collection_ref(user_id)
             .where("folder_ids", "array_contains", folder_id)
+            .stream()
         )
-        folder_data["item_count"] = len(list(collection_ref.stream()))
-        
+
         return folder_data
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.delete("/users/me/folders/{folder_id}")
+@router.delete("/users/me/folders/{folder_id}", responses=_R404_500)
 async def delete_folder(
     folder_id: str,
-    delete_items: bool = Query(False, description="If true, also delete collection items in this folder"),
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
+    delete_items: Annotated[bool,
+                            Query(
+                                description="Also delete collection items in this folder"
+                                )] = False,
 ):
     """Delete a folder. Optionally delete items in the folder."""
     try:
         user_id = current_user["uid"]
-        
-        doc_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FOLDERS_SUBCOLLECTION)
-            .document(folder_id)
-        )
-        
-        doc = doc_ref.get()
-        if not doc.exists:
-            raise HTTPException(status_code=404, detail="Folder not found")
-        
-        # Get items in this folder
-        collection_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
+        doc_ref = _user_folders_ref(user_id).document(folder_id)
+        _get_doc_or_404(doc_ref, "Folder")
+
+        items_in_folder = list(
+            _user_collection_ref(user_id)
             .where("folder_ids", "array_contains", folder_id)
+            .stream()
         )
-        items_in_folder = list(collection_ref.stream())
-        
-        if delete_items:
-            # Delete all items in the folder
-            for item_doc in items_in_folder:
+
+        for item_doc in items_in_folder:
+            if delete_items:
                 item_doc.reference.delete()
-        else:
-            # Remove folder_id from items' folder_ids array
-            for item_doc in items_in_folder:
-                item_data = item_doc.to_dict()
-                folder_ids = item_data.get("folder_ids", [])
-                if folder_id in folder_ids:
-                    folder_ids.remove(folder_id)
-                    item_doc.reference.update({"folder_ids": folder_ids})
-        
-        # Delete the folder
+            else:
+                item_doc.reference.update({"folder_ids": ArrayRemove([folder_id])})
+
         doc_ref.delete()
-        
+
         return {
             "message": "Folder deleted",
             "items_affected": len(items_in_folder),
-            "items_deleted": delete_items
+            "items_deleted": delete_items,
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-# ============== FOLDER ASSIGNMENT ENDPOINTS ==============
-
-@router.post("/users/me/collection/{item_id}/folders")
+@router.post("/users/me/collection/{item_id}/folders", responses=_R404_500)
 async def add_item_to_folders(
     item_id: str,
     request: AddToFoldersRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Add a collection item to one or more folders"""
+    """Add a collection item to one or more folders."""
     try:
         user_id = current_user["uid"]
-        
-        # Get the collection item
-        item_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
-            .document(item_id)
+        item_ref = _user_collection_ref(user_id).document(item_id)
+        item_doc = _get_doc_or_404(item_ref, COLLECTION_ITEM_LABEL)
+
+        _verify_folders_exist(user_id, request.folder_ids)
+
+        new_folder_ids = list(
+            set(item_doc.to_dict().get("folder_ids", [])) | set(request.folder_ids)
         )
-        
-        item_doc = item_ref.get()
-        if not item_doc.exists:
-            raise HTTPException(status_code=404, detail="Collection item not found")
-        
-        # Verify all folders exist
-        for folder_id in request.folder_ids:
-            folder_ref = (
-                db.collection(USERS_COLLECTION)
-                .document(user_id)
-                .collection(FOLDERS_SUBCOLLECTION)
-                .document(folder_id)
-            )
-            if not folder_ref.get().exists:
-                raise HTTPException(status_code=404, detail=f"Folder {folder_id} not found")
-        
-        # Update item's folder_ids
-        item_data = item_doc.to_dict()
-        current_folder_ids = set(item_data.get("folder_ids", []))
-        current_folder_ids.update(request.folder_ids)
-        
-        item_ref.update({"folder_ids": list(current_folder_ids)})
-        
-        return {"message": "Item added to folders", "folder_ids": list(current_folder_ids)}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        item_ref.update({"folder_ids": new_folder_ids})
+
+        return {"message": "Item added to folders", "folder_ids": new_folder_ids}
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.delete("/users/me/collection/{item_id}/folders/{folder_id}")
+@router.delete("/users/me/collection/{item_id}/folders/{folder_id}", responses=_R400_404_500)
 async def remove_item_from_folder(
     item_id: str,
     folder_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Remove a collection item from a folder"""
+    """Remove a collection item from a folder."""
     try:
         user_id = current_user["uid"]
-        
-        # Get the collection item
-        item_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
-            .document(item_id)
-        )
-        
-        item_doc = item_ref.get()
-        if not item_doc.exists:
-            raise HTTPException(status_code=404, detail="Collection item not found")
-        
-        # Update item's folder_ids
-        item_data = item_doc.to_dict()
-        folder_ids = item_data.get("folder_ids", [])
-        
+        item_ref = _user_collection_ref(user_id).document(item_id)
+        item_doc = _get_doc_or_404(item_ref, COLLECTION_ITEM_LABEL)
+
+        folder_ids: list[str] = item_doc.to_dict().get("folder_ids", [])
         if folder_id not in folder_ids:
             raise HTTPException(status_code=400, detail="Item is not in this folder")
-        
+
+        item_ref.update({"folder_ids": ArrayRemove([folder_id])})
         folder_ids.remove(folder_id)
-        item_ref.update({"folder_ids": folder_ids})
-        
+
         return {"message": "Item removed from folder", "folder_ids": folder_ids}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.put("/users/me/collection/{item_id}/folders")
+@router.put("/users/me/collection/{item_id}/folders", responses=_R404_500)
 async def set_item_folders(
     item_id: str,
     request: AddToFoldersRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Set the folders for a collection item (replaces existing folder assignments)"""
+    """Set the folders for a collection item (replaces existing folder assignments)."""
     try:
         user_id = current_user["uid"]
-        
-        # Get the collection item
-        item_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
-            .document(item_id)
-        )
-        
-        item_doc = item_ref.get()
-        if not item_doc.exists:
-            raise HTTPException(status_code=404, detail="Collection item not found")
-        
-        # Verify all folders exist
-        for folder_id in request.folder_ids:
-            folder_ref = (
-                db.collection(USERS_COLLECTION)
-                .document(user_id)
-                .collection(FOLDERS_SUBCOLLECTION)
-                .document(folder_id)
-            )
-            if not folder_ref.get().exists:
-                raise HTTPException(status_code=404, detail=f"Folder {folder_id} not found")
-        
-        # Set item's folder_ids
+        item_ref = _user_collection_ref(user_id).document(item_id)
+        _get_doc_or_404(item_ref, COLLECTION_ITEM_LABEL)
+
+        _verify_folders_exist(user_id, request.folder_ids)
         item_ref.update({"folder_ids": request.folder_ids})
-        
+
         return {"message": "Item folders updated", "folder_ids": request.folder_ids}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-# ============== FAVORITES ENDPOINTS ==============
-
-@router.get("/users/me/favorites", response_model=FavoriteListResponse)
-async def get_my_favorites(
-    current_user: dict = Depends(get_current_user),
-):
-    """Get current user's favorite species"""
-    try:
-        user_id = current_user["uid"]
-        favorites_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FAVORITES_SUBCOLLECTION)
-        )
-        
-        docs = favorites_ref.order_by("added_at", direction=firestore.Query.DESCENDING).stream()
-        
-        items = []
-        for doc in docs:
-            data = doc.to_dict()
-            data["id"] = doc.id
-            data["user_id"] = user_id
-            
-            # Enrich with species details
-            species_details = await get_species_details(data.get("species_id", ""))
-            data.update(species_details)
-            
-            items.append(data)
-        
-        return FavoriteListResponse(items=items, total=len(items))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/users/me/favorites", response_model=FavoriteItemSchema)
-async def add_to_favorites(
-    item: FavoriteItemCreate,
-    current_user: dict = Depends(get_current_user),
-):
-    """Add a species to user's favorites"""
-    try:
-        user_id = current_user["uid"]
-        
-        # Verify species exists
-        species_doc = db.collection(SPECIES_COLLECTION).document(item.species_id).get()
-        if not species_doc.exists:
-            raise HTTPException(status_code=404, detail="Species not found")
-        
-        # Check if already in favorites
-        existing = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FAVORITES_SUBCOLLECTION)
-            .where("species_id", "==", item.species_id)
-            .limit(1)
-            .stream()
-        )
-        if len(list(existing)) > 0:
-            raise HTTPException(status_code=400, detail="Species already in favorites")
-        
-        # Create favorite item
-        item_id = str(uuid.uuid4())
-        now = datetime.utcnow()
-        
-        item_data = item.model_dump()
-        item_data["added_at"] = now
-        
-        (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FAVORITES_SUBCOLLECTION)
-            .document(item_id)
-            .set(item_data)
-        )
-        
-        # Return with species details
-        item_data["id"] = item_id
-        item_data["user_id"] = user_id
-        species_details = await get_species_details(item.species_id)
-        item_data.update(species_details)
-        
-        return item_data
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/users/me/favorites/{item_id}")
-async def remove_from_favorites(
-    item_id: str,
-    current_user: dict = Depends(get_current_user),
-):
-    """Remove a species from user's favorites"""
-    try:
-        user_id = current_user["uid"]
-        
-        doc_ref = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FAVORITES_SUBCOLLECTION)
-            .document(item_id)
-        )
-        
-        doc = doc_ref.get()
-        if not doc.exists:
-            raise HTTPException(status_code=404, detail="Favorite item not found")
-        
-        doc_ref.delete()
-        
-        return {"message": "Item removed from favorites"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/users/me/favorites/{species_id}/check")
-async def check_if_favorite(
-    species_id: str,
-    current_user: dict = Depends(get_current_user),
-):
-    """Check if a species is in user's favorites"""
-    try:
-        user_id = current_user["uid"]
-        
-        existing = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(FAVORITES_SUBCOLLECTION)
-            .where("species_id", "==", species_id)
-            .limit(1)
-            .stream()
-        )
-        
-        items = list(existing)
-        is_favorite = len(items) > 0
-        favorite_id = items[0].id if is_favorite else None
-        
-        return {"is_favorite": is_favorite, "favorite_id": favorite_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/users/me/collection/{species_id}/check")
+@router.get("/users/me/collection/{species_id}/check", responses=_R500)
 async def check_if_in_collection(
     species_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """Check if a species is in user's collection"""
+    """Check if a species is in user's collection."""
     try:
         user_id = current_user["uid"]
-        
-        existing = (
-            db.collection(USERS_COLLECTION)
-            .document(user_id)
-            .collection(COLLECTION_SUBCOLLECTION)
+        items = list(
+            _user_collection_ref(user_id)
             .where("species_id", "==", species_id)
             .limit(1)
             .stream()
         )
-        
-        items = list(existing)
-        in_collection = len(items) > 0
-        collection_id = items[0].id if in_collection else None
-        
-        return {"in_collection": in_collection, "collection_id": collection_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        in_collection = bool(items)
+        return {
+            "in_collection": in_collection,
+            "collection_id": items[0].id if in_collection else None,
+        }
+    except (GoogleAPICallError, RetryError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
