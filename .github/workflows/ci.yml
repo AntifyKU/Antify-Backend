@@ -32,6 +32,7 @@ jobs:
         run: python -m venv venv
 
       - name: Install dependencies (inside venv)
+        id: install
         run: |
           source venv/bin/activate
           python -m pip install --upgrade pip
@@ -41,14 +42,17 @@ jobs:
             pip install -r requirements.txt
             pip install pytest pytest-asyncio pytest-cov httpx ruff
           fi
+          pip install python-multipart
 
       - name: Lint (ruff)
+        id: lint
         continue-on-error: true
         run: |
           source venv/bin/activate
           ruff check .
 
       - name: Run tests
+        id: tests
         continue-on-error: true
         env:
           FIREBASE_SERVICE_ACCOUNT: '{"type":"service_account"}'
@@ -63,6 +67,7 @@ jobs:
             -v
 
       - name: Upload coverage artifact
+        id: upload_coverage
         if: always() && matrix.python-version == '3.11'
         continue-on-error: true
         uses: actions/upload-artifact@v4
@@ -70,6 +75,21 @@ jobs:
           name: coverage-report
           path: coverage.xml
           retention-days: 1
+
+      - name: Mark job failed if any step failed
+        if: always()
+        run: |
+          failed=0
+
+          [ "${{ steps.install.outcome }}" = "failure" ] && failed=1
+          [ "${{ steps.lint.outcome }}" = "failure" ] && failed=1
+          [ "${{ steps.tests.outcome }}" = "failure" ] && failed=1
+          [ "${{ steps.upload_coverage.outcome }}" = "failure" ] && failed=1
+
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more CI steps failed."
+            exit 1
+          fi
 
   sonar:
     name: SonarQube Analysis
@@ -84,14 +104,29 @@ jobs:
           fetch-depth: 0
 
       - name: Download coverage report
+        id: download_coverage
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: coverage-report
 
       - name: SonarCloud Scan
+        id: sonar_scan
         continue-on-error: true
         uses: SonarSource/sonarcloud-github-action@v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Mark sonar job failed if any step failed
+        if: always()
+        run: |
+          failed=0
+
+          [ "${{ steps.download_coverage.outcome }}" = "failure" ] && failed=1
+          [ "${{ steps.sonar_scan.outcome }}" = "failure" ] && failed=1
+
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more Sonar job steps failed."
+            exit 1
+          fi
