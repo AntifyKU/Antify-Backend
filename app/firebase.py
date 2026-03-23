@@ -11,7 +11,13 @@ load_dotenv()
 try:
     firebase_admin.get_app()
 except ValueError:
-    cred = credentials.Certificate(os.getenv("FIREBASE_CREDENTIALS"))
+    cred_path = os.getenv("FIREBASE_CREDENTIALS")
+    if cred_path and os.path.exists(cred_path):
+        cred = credentials.Certificate(cred_path)
+    else:
+        # Fallback to Application Default Credentials for Cloud Run
+        cred = credentials.ApplicationDefault()
+        
     firebase_admin.initialize_app(cred, {
         'storageBucket': os.getenv("FIREBASE_STORAGE_BUCKET", "")
     })
