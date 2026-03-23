@@ -18,11 +18,12 @@ except ValueError:
         # Fallback to Application Default Credentials for Cloud Run
         cred = credentials.ApplicationDefault()
         
+    bucket_name = os.getenv("FIREBASE_STORAGE_BUCKET", "").strip()
     firebase_admin.initialize_app(cred, {
-        'storageBucket': os.getenv("FIREBASE_STORAGE_BUCKET", "")
+        'storageBucket': bucket_name
     })
 
 firebase = pyrebase.initialize_app(firebaseConfig)
 
-# Firebase Storage bucket
-bucket = storage.bucket()
+# Firebase Storage bucket (handle empty name gracefully)
+bucket = storage.bucket(bucket_name) if bucket_name else None
