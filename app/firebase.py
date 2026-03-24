@@ -19,9 +19,13 @@ except ValueError:
         cred = credentials.ApplicationDefault()
         
     bucket_name = os.getenv("FIREBASE_STORAGE_BUCKET", "").strip()
-    firebase_admin.initialize_app(cred, {
-        'storageBucket': bucket_name
-    })
+    project_id = os.getenv("FIREBASE_PROJECT_ID", "").strip()
+    
+    config = {'storageBucket': bucket_name}
+    if project_id:
+        config['projectId'] = project_id
+        
+    firebase_admin.initialize_app(cred, config)
 
 firebase = pyrebase.initialize_app(firebaseConfig)
 
@@ -30,4 +34,5 @@ bucket = storage.bucket(bucket_name) if bucket_name else None
 
 # Centralized Firestore client
 from firebase_admin import firestore
-db = firestore.client()
+# Explicitly use project_id if available to avoid defaulting to the Cloud Run host project
+db = firestore.client(project=project_id) if project_id else firestore.client()
