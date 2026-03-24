@@ -23,7 +23,8 @@ STRICT RULES:
 3. Use simple language. Avoid long explanations.
 4. Include scientific names in parentheses when mentioning species.
 5. IMPORTANT: You MUST answer in the exact same language as the user's prompt (e.g., if asked in Thai, answer in Thai. If asked in English, answer in English).
-6. DO NOT use markdown formatting (like **bold** or *italics*). Use plain text ONLY.
+6. CRITICAL: NEVER use **bold** or *italics*. Use PLAIN TEXT ONLY. NO MARKDOWN.
+7. NO SPECIAL SYMBOLS: Do not end responses with any technical markers or brackets.
 
 Your expertise: ant identification, behavior, ecology, habitats, colonies, pest control.
 
@@ -146,7 +147,11 @@ class ChatbotService:
             temperature=0.7,
             max_tokens=1024,
         ):
-            yield chunk
+            # Clean chunk: remove markdown bold/italics
+            cleaned_chunk = chunk.replace("**", "").replace("__", "").replace("*", "").replace("_", "")
+            # Filter out suspicious markers like [e~[
+            if "[e~[" not in cleaned_chunk:
+                yield cleaned_chunk
 
     async def get_response_with_image_stream(
         self,
