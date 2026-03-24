@@ -17,6 +17,7 @@ gcloud run deploy $SERVICE_NAME \
   --allow-unauthenticated \
   --set-env-vars="AI_SERVICE_URL=https://antify-ai-component-un6q7l6uaq-as.a.run.app" \
   --set-env-vars="FIREBASE_PROJECT_ID=antify-ef665" \
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=antify-ef665" \
   --set-env-vars="FIREBASE_STORAGE_BUCKET=antify-ef665.firebasestorage.app" \
   --set-env-vars="FIREBASE_CREDENTIALS=/app/firebase-service-account.json" \
   --set-env-vars="OPENROUTER_MODEL=minimax/minimax-m2.5" \

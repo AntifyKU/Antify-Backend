@@ -34,5 +34,4 @@ bucket = storage.bucket(bucket_name) if bucket_name else None
 
 # Centralized Firestore client
 from firebase_admin import firestore
-# Explicitly use project_id if available to avoid defaulting to the Cloud Run host project
-db = firestore.client(project=project_id) if project_id else firestore.client()
+db = firestore.client()
