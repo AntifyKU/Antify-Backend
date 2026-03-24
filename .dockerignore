@@ -21,6 +21,6 @@ pip-delete-this-directory.txt
 # OS specific
 .DS_Store
 
-# Secrets (DO NOT INCLUDE IN IMAGE)
+# Secrets (DO NOT INCLUDE IN PUBLIC IMAGES)
 .env
-firebase-service-account.json
+# Note: firebase-service-account.json is included for Cloud Run cross-project access.
