@@ -25,7 +25,12 @@ except ValueError:
     if project_id:
         config['projectId'] = project_id
         
-    firebase_admin.initialize_app(cred, config)
+    print(f"DEBUG: Initializing Firebase Admin with Project ID: {project_id or 'default'}")
+    print(f"DEBUG: Storage Bucket: {bucket_name}")
+    print(f"DEBUG: Using Credentials: {'Service Account Key' if cred_path and os.path.exists(cred_path) else 'Application Default'}")
+    
+    app = firebase_admin.initialize_app(cred, config)
+    print(f"DEBUG: Firebase app initialized: {app.name} (Project: {app.project_id})")
 
 firebase = pyrebase.initialize_app(firebaseConfig)
 
