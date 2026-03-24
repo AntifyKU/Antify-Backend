@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Depends, Query
 from google.api_core.exceptions import GoogleAPICallError, RetryError
 from google.cloud.firestore import Client, Query as FirestoreQuery, ArrayRemove
-from firebase_admin import firestore
+from app.firebase import db
 
 from app.models.collection import (
     CollectionItemCreate,
@@ -23,7 +23,7 @@ from app.models.collection import (
 from app.dependencies.auth import get_current_user
 
 router = APIRouter()
-db: Client = firestore.client()
+
 
 USERS_COLLECTION = "users"
 COLLECTION_SUBCOLLECTION = "collection"

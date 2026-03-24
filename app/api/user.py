@@ -13,7 +13,7 @@ import cloudinary
 import cloudinary.uploader
 import requests
 
-from firebase_admin import auth, firestore
+from firebase_admin import auth
 
 from app.models.user import (
     SignUpSchema,
@@ -24,7 +24,7 @@ from app.models.user import (
     ChangeEmailSchema,
 )
 from app.dependencies.auth import get_current_user
-from app.firebase import firebase
+from app.firebase import firebase, db
 
 from pydantic import BaseModel
 
@@ -35,7 +35,7 @@ router = APIRouter()
 # so these handler functions have no auth parameter in their signatures.
 admin_router = APIRouter()
 
-db = firestore.client()
+
 
 CLOUDINARY_DOMAIN = "cloudinary.com"
 USER_NOT_FOUND = "User not found"

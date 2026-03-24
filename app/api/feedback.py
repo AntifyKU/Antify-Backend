@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import uuid
 from fastapi import APIRouter, HTTPException, Depends, Query
 from google.cloud.firestore import Client, Query as FirestoreQuery
-from firebase_admin import firestore
+from app.firebase import db
 
 from app.models.feedback import (
     FeedbackCreateSchema,
@@ -27,7 +27,7 @@ router = APIRouter()
 # Admin-only routes
 admin_router = APIRouter()
 
-db: Client = firestore.client()
+
 
 FEEDBACK_COLLECTION = "feedback"
 AI_FEEDBACK_COLLECTION = "ai_feedback"

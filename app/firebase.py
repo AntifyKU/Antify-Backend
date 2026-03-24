@@ -27,3 +27,7 @@ firebase = pyrebase.initialize_app(firebaseConfig)
 
 # Firebase Storage bucket (handle empty name gracefully)
 bucket = storage.bucket(bucket_name) if bucket_name else None
+
+# Centralized Firestore client
+from firebase_admin import firestore
+db = firestore.client()

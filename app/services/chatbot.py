@@ -6,10 +6,10 @@ import json
 from typing import List, Dict, Any, AsyncGenerator
 import re
 
-from firebase_admin import firestore
+from app.firebase import db
 from app.services.openrouter import openrouter_client
 
-db = firestore.client()
+
 SPECIES_COLLECTION = "species"
 
 

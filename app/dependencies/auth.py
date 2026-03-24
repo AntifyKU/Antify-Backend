@@ -1,7 +1,8 @@
 """ Firebase authentication utilities """
 from typing import Annotated, Optional
 from fastapi import Header, HTTPException, Depends
-from firebase_admin import auth, firestore
+from firebase_admin import auth
+from app.firebase import db
 
 BEARER_PREFIX = "Bearer "
 INVALID_TOKEN_DETAIL = "Invalid token"
@@ -66,7 +67,7 @@ def get_current_user(authorization: str = Header(...)) -> dict:
 def require_admin(current_user: Annotated[dict, Depends(get_current_user)]) -> dict:
     """Dependency: verify the calling user has the 'admin' role"""
     try:
-        db = firestore.client()
+
         doc = db.collection("users").document(current_user["uid"]).get()
     except Exception as exc:
         raise HTTPException(

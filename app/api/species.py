@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import uuid
 from fastapi import APIRouter, HTTPException, Query
 from google.cloud.firestore import Client
-from firebase_admin import firestore
+from app.firebase import db
 
 from app.models.species import (
     SpeciesSchema,
@@ -19,7 +19,7 @@ router = APIRouter()
 # Admin-only routes
 admin_router = APIRouter()
 
-db: Client = firestore.client()
+
 
 SPECIES_COLLECTION = "species"
 SPECIES_NOT_FOUND = "Species not found"
