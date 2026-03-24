@@ -20,9 +20,9 @@ gcloud run deploy $SERVICE_NAME \
   --set-env-vars="FIREBASE_STORAGE_BUCKET=antify-ef665.firebasestorage.app" \
   --set-env-vars="FIREBASE_CREDENTIALS=/app/firebase-service-account.json" \
   --set-env-vars="OPENROUTER_MODEL=minimax/minimax-m2.5" \
-  --set-env-vars="CLOUDINARY_CLOUD_NAME=denlxho1c" \
-  --set-env-vars="CLOUDINARY_API_KEY=***REMOVED***" \
-  --set-env-vars="CLOUDINARY_API_SECRET=***REMOVED***"
-# Note: For sensitive keys (like API keys), it's better to use Google Secret Manager!
+  --set-env-vars="CLOUDINARY_CLOUD_NAME=YOUR_CLOUD_NAME" \
+  --set-env-vars="CLOUDINARY_API_KEY=YOUR_API_KEY" \
+  --set-env-vars="CLOUDINARY_API_SECRET=YOUR_API_SECRET"
+# IMPORTANT: Use Google Secret Manager or Environment Variables in the GCP Console instead of hardcoding keys!
 
 echo "✅ Deployment complete!"
