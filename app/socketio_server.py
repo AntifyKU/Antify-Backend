@@ -57,15 +57,20 @@ async def message(sid: str, data: Dict[str, Any]):
         full_response = ""
 
         # Stream response chunks
-        async for chunk in chatbot_service.get_response_stream(
+        stream_gen, _ = chatbot_service.get_response_stream(
             content=content,
             conversation_history=conversation_history,
-        ):
+        )
+        
+        async for chunk in stream_gen:
             full_response += chunk
             await sio.emit("response", chunk, to=sid)
 
-        # Signal completion
-        await sio.emit("response_complete", to=sid)
+        # Find all species mentioned in the final response using comprehensive database scan
+        final_species = chatbot_service.find_species_in_text(full_response)
+
+        # Signal completion with detected species metadata
+        await sio.emit("response_complete", {"detected_species": final_species}, to=sid)
 
         # Generate contextual suggestions based on updated conversation
         updated_history = conversation_history + [
@@ -105,16 +110,21 @@ async def message_with_image(sid: str, data: Dict[str, Any]):
         full_response = ""
 
         # Stream response chunks
-        async for chunk in chatbot_service.get_response_with_image_stream(
+        stream_gen, _ = chatbot_service.get_response_with_image_stream(
             content=content,
             image_base64=image_base64,
             mime_type=mime_type,
-        ):
+        )
+        
+        async for chunk in stream_gen:
             full_response += chunk
             await sio.emit("response", chunk, to=sid)
 
-        # Signal completion
-        await sio.emit("response_complete", to=sid)
+        # Find all species mentioned in the final response using comprehensive database scan
+        final_species = chatbot_service.find_species_in_text(full_response)
+
+        # Signal completion with detected species metadata
+        await sio.emit("response_complete", {"detected_species": final_species}, to=sid)
 
         # Generate contextual suggestions based on the image analysis
         updated_history = [

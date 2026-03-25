@@ -70,14 +70,86 @@ class ChatbotService:
 
     def __init__(self):
         self.system_prompt = ANT_EXPERT_SYSTEM_PROMPT
+        self._all_species_cache = []
 
-    def _get_relevant_ant_context(self, query: str) -> str:
+    def _get_all_species(self) -> List[Dict[str, Any]]:
+        """Fetch all species from Firebase for comprehensive name matching."""
+        if self._all_species_cache:
+            return self._all_species_cache
+        
+        try:
+            docs = db.collection(SPECIES_COLLECTION).stream()
+            self._all_species_cache = []
+            for doc in docs:
+                data = doc.to_dict()
+                # Store only essential fields for matching and display
+                self._all_species_cache.append({
+                    "id": data.get("id"),
+                    "name": data.get("name"),
+                    "scientific_name": data.get("scientific_name"),
+                    "image": data.get("image"),
+                    "risk": data.get("risk")
+                })
+            return self._all_species_cache
+        except Exception as e:
+            print(f"Error fetching all species: {e}")
+            return []
+
+    def find_species_in_text(self, text: str) -> List[Dict[str, Any]]:
+        """Scan text for any species name or scientific name from the database."""
+        species_list = self._get_all_species()
+        matches = []
+        text_lower = text.lower()
+        
+        # Sort by name length descending to match longest names first
+        sorted_species = sorted(species_list, key=lambda x: len(x.get("name", "") or ""), reverse=True)
+        
+        seen_ids = set()
+        for s in sorted_species:
+            if s.get("id") in seen_ids:
+                continue
+                
+            name = (s.get("name") or "").lower()
+            sci = (s.get("scientific_name") or "").lower()
+            
+            # 1. Match Scientific Name (very reliable)
+            # If "solenopsis geminata" is the sci name, it matches "solenopsis" or "solenopsis geminata"
+            # But let's be more specific to genus or full name
+            sci_parts = sci.split()
+            genus = sci_parts[0] if sci_parts else ""
+            
+            # Match full scientific name or the genus if it's long enough
+            if (sci and sci in text_lower) or (len(genus) > 4 and genus in text_lower):
+                matches.append(s)
+                seen_ids.add(s.get("id"))
+                continue
+
+            # 2. Match Common Name
+            # We check if name is in text. To handle plurals like "Fire ants" matching "Fire ant",
+            # we check if the name is a substring.
+            if name and len(name) > 3:
+                # Use word boundaries for short names, but be permissive for longer ones
+                if len(name) < 6:
+                    if re.search(rf'\b{re.escape(name)}\b', text_lower):
+                        matches.append(s)
+                        seen_ids.add(s.get("id"))
+                        continue
+                elif name in text_lower:
+                    matches.append(s)
+                    seen_ids.add(s.get("id"))
+                    continue
+                    
+        # Limit to 3 cards max to avoid clutter
+        return matches[:3]
+
+    def _get_relevant_ant_context(self, query: str) -> tuple[str, List[Dict[str, Any]]]:
         """Fetch ant details from Firebase if query matches ant names/tags."""
         try:
-            # Simple keyword extraction: words longer than 3 chars
-            words = set(re.findall(r'\b\w{3,}\b', query.lower()))
+            # SIMPLE KEYWORD EXTRACTION: words longer than 3 chars, filtering out common generic words
+            GENERIC_WORDS = {"ant", "ants", "what", "which", "where", "tell", "about", "show", "many"}
+            words = {w for w in re.findall(r'\b\w{3,}\b', query.lower()) if w not in GENERIC_WORDS}
             if not words:
-                return ""
+                return "", []
 
             species_ref = db.collection(SPECIES_COLLECTION)
             docs = species_ref.stream()
@@ -98,7 +170,7 @@ class ChatbotService:
                     break
 
             if not matches:
-                return ""
+                return "", []
 
             context_parts = ["\n[Database Context about mentioned ants]:"]
             for m in matches:
@@ -108,18 +180,29 @@ class ChatbotService:
                     f"Habitat: {', '.join(m.get('habitat', []))}. "
                     f"Behavior: {m.get('behavior', '')}."
                 )
-            return "\n".join(context_parts)
+            # Return context string and the list of species objects with essential fields
+            species_metadata = []
+            for m in matches:
+                species_metadata.append({
+                    "id": m.get("id"),
+                    "name": m.get("name"),
+                    "scientific_name": m.get("scientific_name"),
+                    "image": m.get("image"),
+                    "risk": m.get("risk")
+                })
+            return "\n".join(context_parts), species_metadata
         except (ValueError, TypeError) as e:
             print(f"Error fetching RAG context: {e}")
-            return ""
+            return "", []
 
-    async def get_response_stream(
+    def get_response_stream(
         self,
         content: str,
         conversation_history: List[Dict[str, Any]] = None,
-    ) -> AsyncGenerator[str, None]:
+    ) -> tuple[AsyncGenerator[str, None], List[Dict[str, Any]]]:
         """
         Get streaming response from the chatbot.
+        Returns a tuple of (streaming_generator, relevant_species_metadata).
         """
         # Build messages list
         messages = []
@@ -134,33 +217,38 @@ class ChatbotService:
                 })
 
         # Get context from Firebase based on latest message
-        rag_context = self._get_relevant_ant_context(content)
+        rag_context, relevant_species = self._get_relevant_ant_context(content)
         final_system_prompt = self.system_prompt + rag_context
 
         # Add current user message
         messages.append({"role": "user", "content": content})
 
-        # Stream response
-        async for chunk in openrouter_client.chat_stream(
-            messages=messages,
-            system_prompt=final_system_prompt,
-            temperature=0.7,
-            max_tokens=1024,
-        ):
-            # Clean chunk: remove markdown bold/italics
-            cleaned_chunk = chunk.replace("**", "").replace("__", "").replace("*", "").replace("_", "")
-            # Filter out suspicious markers like [e~[
-            if "[e~[" not in cleaned_chunk:
-                yield cleaned_chunk
+        # Define the generator
+        async def stream_generator():
+            # Stream response
+            async for chunk in openrouter_client.chat_stream(
+                messages=messages,
+                system_prompt=final_system_prompt,
+                temperature=0.7,
+                max_tokens=1024,
+            ):
+                # Clean chunk: remove markdown bold/italics
+                cleaned_chunk = chunk.replace("**", "").replace("__", "").replace("*", "").replace("_", "")
+                # Filter out suspicious markers like [e~[
+                if "[e~[" not in cleaned_chunk:
+                    yield cleaned_chunk
 
-    async def get_response_with_image_stream(
+        return stream_generator(), relevant_species
+
+    def get_response_with_image_stream(
         self,
         content: str,
         image_base64: str,
         mime_type: str = "image/jpeg",
-    ) -> AsyncGenerator[str, None]:
+    ) -> tuple[AsyncGenerator[str, None], List[Dict[str, Any]]]:
         """
         Get streaming response for a message with an image.
+        Returns a tuple of (streaming_generator, relevant_species_metadata).
         """
         # Add context to help with ant identification (kept short)
         enhanced_prompt = f"""User sent an image: "{content}"
@@ -173,18 +261,21 @@ Identify the ant briefly:
 If not an ant image, say so briefly."""
 
         # Get context from Firebase based on current question
-        rag_context = self._get_relevant_ant_context(content)
+        rag_context, relevant_species = self._get_relevant_ant_context(content)
         final_system_prompt = self.system_prompt + rag_context
 
-        async for chunk in openrouter_client.chat_with_image(
-            text=enhanced_prompt,
-            image_base64=image_base64,
-            mime_type=mime_type,
-            system_prompt=final_system_prompt,
-            temperature=0.7,
-            max_tokens=512,
-        ):
-            yield chunk
+        async def stream_generator():
+            async for chunk in openrouter_client.chat_with_image(
+                text=enhanced_prompt,
+                image_base64=image_base64,
+                mime_type=mime_type,
+                system_prompt=final_system_prompt,
+                temperature=0.7,
+                max_tokens=512,
+            ):
+                yield chunk
+
+        return stream_generator(), relevant_species
 
     async def generate_suggestions(
         self,

@@ -11,10 +11,18 @@ load_dotenv()
 try:
     firebase_admin.get_app()
 except ValueError:
+    print(f"DEBUG: Current Working Directory: {os.getcwd()}")
+    print(f"DEBUG: Files in current directory: {os.listdir('.')}")
+    
     cred_path = os.getenv("FIREBASE_CREDENTIALS")
+    print(f"DEBUG: FIREBASE_CREDENTIALS env var: {cred_path}")
+    
     if cred_path and os.path.exists(cred_path):
+        print(f"DEBUG: Found credentials file at {cred_path}")
         cred = credentials.Certificate(cred_path)
     else:
+        if cred_path:
+            print(f"DEBUG: Credentials file NOT FOUND at {cred_path}")
         # Fallback to Application Default Credentials for Cloud Run
         cred = credentials.ApplicationDefault()
         
