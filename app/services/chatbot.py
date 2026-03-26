@@ -21,10 +21,14 @@ STRICT RULES:
 1. ONLY answer questions about ants. For non-ant topics, politely say: "I specialize in ants only. Please ask me about ants!"
 2. Keep responses SHORT (2-4 sentences max). Be concise and direct.
 3. Use simple language. Avoid long explanations.
-4. Include scientific names in parentheses when mentioning species.
-5. IMPORTANT: You MUST answer in the exact same language as the user's prompt (e.g., if asked in Thai, answer in Thai. If asked in English, answer in English).
-6. CRITICAL: NEVER use **bold** or *italics*. Use PLAIN TEXT ONLY. NO MARKDOWN.
-7. NO SPECIAL SYMBOLS: Do not end responses with any technical markers or brackets.
+24. Include scientific names in parentheses when mentioning species.
+25. BEHAVIOR RULES:
+    - If the user asks a general question (e.g., habitat, behavior, lifecycle): Answer with a simple text explanation only.
+    - If the user asks about a specific species OR a specific trait (e.g., venom, sting, size, diet): You MUST mention at least one representative species name AND scientific name in your response (e.g., "Fire Ants (Solenopsis) have venom") so the system can display an information card.
+26. Even if the user does not ask for a specific species, but asks about a trait (like venom), you should still mention a relevant representative species from the database.
+27. IMPORTANT: You MUST answer in the exact same language as the user's prompt (e.g., if asked in Thai, answer in Thai).
+28. CRITICAL: NEVER use **bold** or *italics*. Use PLAIN TEXT ONLY. NO MARKDOWN.
+29. NO SPECIAL SYMBOLS: Do not end responses with any technical markers or brackets.
 
 Your expertise: ant identification, behavior, ecology, habitats, colonies, pest control.
 
@@ -98,8 +102,11 @@ class ChatbotService:
     def find_species_in_text(self, text: str) -> List[Dict[str, Any]]:
         """Scan text for any species name or scientific name from the database."""
         species_list = self._get_all_species()
-        matches = []
         text_lower = text.lower()
+        
+        # We'll categorize matches by "quality"
+        full_matches = [] # Full scientific name or full common name
+        partial_matches = [] # Genus-only or substring match
         
         # Sort by name length descending to match longest names first
         sorted_species = sorted(species_list, key=lambda x: len(x.get("name", "") or ""), reverse=True)
@@ -112,35 +119,39 @@ class ChatbotService:
             name = (s.get("name") or "").lower()
             sci = (s.get("scientific_name") or "").lower()
             
-            # 1. Match Scientific Name (very reliable)
-            # If "solenopsis geminata" is the sci name, it matches "solenopsis" or "solenopsis geminata"
-            # But let's be more specific to genus or full name
-            sci_parts = sci.split()
-            genus = sci_parts[0] if sci_parts else ""
-            
-            # Match full scientific name or the genus if it's long enough
-            if (sci and sci in text_lower) or (len(genus) > 4 and genus in text_lower):
-                matches.append(s)
+            # 1. Match Full Scientific Name (Highest priority)
+            if sci and sci in text_lower:
+                full_matches.append(s)
                 seen_ids.add(s.get("id"))
                 continue
 
-            # 2. Match Common Name
-            # We check if name is in text. To handle plurals like "Fire ants" matching "Fire ant",
-            # we check if the name is a substring.
+            # 2. Match Full Common Name (High priority)
             if name and len(name) > 3:
-                # Use word boundaries for short names, but be permissive for longer ones
-                if len(name) < 6:
+                # Use word boundaries for short names
+                if len(name) < 7:
                     if re.search(rf'\b{re.escape(name)}\b', text_lower):
-                        matches.append(s)
+                        full_matches.append(s)
                         seen_ids.add(s.get("id"))
                         continue
                 elif name in text_lower:
-                    matches.append(s)
+                    full_matches.append(s)
                     seen_ids.add(s.get("id"))
                     continue
-                    
-        # Limit to 3 cards max to avoid clutter
-        return matches[:3]
+
+            # 3. Match Genus (Lower priority, only if genus is unique or no other match)
+            sci_parts = sci.split()
+            genus = sci_parts[0] if sci_parts else ""
+            if len(genus) > 4 and re.search(rf'\b{re.escape(genus)}\b', text_lower):
+                partial_matches.append(s)
+                seen_ids.add(s.get("id"))
+                
+        # Result selection:
+        # If we have full name matches, return only those (up to 3)
+        if full_matches:
+            return full_matches[:3]
+            
+        # Otherwise, fall back to partial matches (up to 2)
+        return partial_matches[:2]
 
     def _get_relevant_ant_context(self, query: str) -> tuple[str, List[Dict[str, Any]]]:
         """Fetch ant details from Firebase if query matches ant names/tags."""
