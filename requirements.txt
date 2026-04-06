@@ -43,7 +43,6 @@ pycryptodome==3.23.0
 pydantic==2.12.5
 pydantic_core==2.41.5
 PyJWT==2.10.1
-deep-translator==1.14.2
 pylint==3.6.0
 pyparsing==3.3.1
 Pyrebase4==4.8.0
