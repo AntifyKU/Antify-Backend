@@ -11,6 +11,7 @@ from app.services.openrouter import OpenRouterClient
 
 @pytest.mark.asyncio
 async def test_chat_stream_yields_chunks():
+    """Test that the chat stream yields chunks."""
     chunk = MagicMock()
     chunk.choices = [MagicMock(delta=MagicMock(content="Hi"))]
 
@@ -29,6 +30,7 @@ async def test_chat_stream_yields_chunks():
 
 @pytest.mark.asyncio
 async def test_chat_returns_string():
+    """Test that the chat returns a string."""
     msg = MagicMock()
     msg.content = "Done"
     choice = MagicMock(message=msg)
@@ -44,6 +46,7 @@ async def test_chat_returns_string():
 
 @pytest.mark.asyncio
 async def test_chat_stream_oserror_yields_error_message():
+    """Test that the chat stream yields an error message on OS error."""
     with patch("app.services.openrouter.AsyncOpenAI") as ctor:
         inst = ctor.return_value
         inst.chat.completions.create = AsyncMock(side_effect=OSError("net"))

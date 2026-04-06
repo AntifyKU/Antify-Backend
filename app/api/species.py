@@ -2,7 +2,8 @@
 from typing import Annotated, Optional
 from datetime import datetime, timezone
 import uuid
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field
 from google.cloud.firestore import Client
 from firebase_admin import firestore
 
@@ -26,22 +27,107 @@ SPECIES_NOT_FOUND = "Species not found"
 
 _R500 = {500: {"description": "Internal server error"}}
 _R404_500 = {404: {"description": SPECIES_NOT_FOUND}, **_R500}
+# pylint: disable=duplicate-code
+
+
+class SpeciesQueryParams(BaseModel):
+    """Query params for species listing filters and pagination."""
+
+    search: Optional[str] = Field(default=None, description="Search by name or scientific name")
+    tags: Optional[str] = Field(default=None, description="Comma-separated tags to filter by")
+    colors: Optional[str] = Field(default=None, description="Comma-separated colors to filter by")
+    habitat: Optional[str] = Field(
+        default=None,
+        description="Comma-separated habitats to filter by",
+    )
+    distribution: Optional[str] = Field(
+        default=None, description="Comma-separated regions to filter by"
+    )
+    province: Optional[str] = Field(
+        default=None, description="Province name, filters by distribution_v2.provinces"
+    )
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=500, ge=1, le=1000)
+
+
+def _split_csv(value: Optional[str]) -> list[str]:
+    """Split CSV query values into normalized lowercase tokens."""
+    if not value:
+        return []
+    return [item.strip().lower() for item in value.split(",") if item.strip()]
+
+
+def _filter_by_contains_list(
+    items: list[dict],
+    field_name: str,
+    candidates: list[str],
+) -> list[dict]:
+    """Keep items where any candidate is in the given list field."""
+    if not candidates:
+        return items
+    return [
+        item
+        for item in items
+        if any(
+            candidate in [v.lower() for v in item.get(field_name, [])]
+            for candidate in candidates
+        )
+    ]
+
+
+def _filter_by_distribution(items: list[dict], distribution: Optional[str]) -> list[dict]:
+    """Filter by partial match against distribution strings."""
+    dist_list = _split_csv(distribution)
+    if not dist_list:
+        return items
+    return [
+        item
+        for item in items
+        if any(
+            any(d in dist.lower() or dist.lower() in d for dist in item.get("distribution", []))
+            for d in dist_list
+        )
+    ]
+
+
+def _filter_by_province(items: list[dict], province: Optional[str]) -> list[dict]:
+    """Filter by partial match against distribution_v2.provinces."""
+    if not province:
+        return items
+    prov = province.strip().lower()
+    return [
+        item
+        for item in items
+        if any(
+            prov in p.lower() or p.lower() in prov
+            for p in (item.get("distribution_v2") or {}).get("provinces", [])
+        )
+    ]
+
+
+def _apply_species_filters(all_species: list[dict], params: SpeciesQueryParams) -> list[dict]:
+    """Apply all optional species filters."""
+    filtered = all_species
+
+    if params.search:
+        query_text = params.search.lower()
+        filtered = [
+            item
+            for item in filtered
+            if query_text in item.get("name", "").lower()
+            or query_text in item.get("scientific_name", "").lower()
+        ]
+
+    filtered = _filter_by_contains_list(filtered, "tags", _split_csv(params.tags))
+    filtered = _filter_by_contains_list(filtered, "colors", _split_csv(params.colors))
+    filtered = _filter_by_contains_list(filtered, "habitat", _split_csv(params.habitat))
+    filtered = _filter_by_distribution(filtered, params.distribution)
+    return _filter_by_province(filtered, params.province)
 
 
 @router.get("/species", response_model=SpeciesListResponse, responses=_R500)
 async def list_species(
-    search: Annotated[Optional[str], Query(description="Search by name or scientific name")] = None,
-    tags: Annotated[Optional[str], Query(description="Comma-separated tags to filter by")] = None,
-    colors: Annotated[Optional[str],
-                      Query(description="Comma-separated colors to filter by")] = None,
-    habitat: Annotated[Optional[str],
-                       Query(description="Comma-separated habitats to filter by")] = None,
-    distribution: Annotated[Optional[str],
-                            Query(description="Comma-separated regions to filter by")] = None,
-    province: Annotated[Optional[str],Query(description=
-                              "Province name, filters by distribution_v2.provinces")] = None,
-    page: Annotated[int, Query(ge=1)] = 1,
-    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    params: Annotated[SpeciesQueryParams, Depends()],
 ):
     """List all species with optional filters."""
     try:
@@ -51,62 +137,18 @@ async def list_species(
             data["id"] = doc.id
             all_species.append(data)
 
-        filtered = all_species
-
-        if search:
-            q = search.lower()
-            filtered = [
-                s for s in filtered
-                if q in s.get("name", "").lower() or q in s.get("scientific_name", "").lower()
-            ]
-
-        if tags:
-            tag_list = [t.strip().lower() for t in tags.split(",")]
-            filtered = [
-                s for s in filtered
-                if any(tag in [t.lower() for t in s.get("tags", [])] for tag in tag_list)
-            ]
-
-        if colors:
-            color_list = [c.strip().lower() for c in colors.split(",")]
-            filtered = [
-                s for s in filtered
-                if any(c in [x.lower() for x in s.get("colors", [])] for c in color_list)
-            ]
-
-        if habitat:
-            hab_list = [h.strip().lower() for h in habitat.split(",")]
-            filtered = [
-                s for s in filtered
-                if any(h in [x.lower() for x in s.get("habitat", [])] for h in hab_list)
-            ]
-
-        if distribution:
-            dist_list = [d.strip().lower() for d in distribution.split(",")]
-            filtered = [
-                s for s in filtered
-                if any(
-                    any(d in dist.lower() or dist.lower()
-                        in d for dist in s.get("distribution", []))
-                    for d in dist_list
-                )
-            ]
-
-        if province:
-            prov = province.strip().lower()
-            filtered = [
-                s for s in filtered
-                if any(
-                    prov in p.lower() or p.lower() in prov
-                    for p in (s.get("distribution_v2") or {}).get("provinces", [])
-                )
-            ]
+        filtered = _apply_species_filters(all_species, params)
 
         total = len(filtered)
-        start = (page - 1) * limit
-        paginated = filtered[start: start + limit]
+        start = (params.page - 1) * params.limit
+        paginated = filtered[start: start + params.limit]
 
-        return SpeciesListResponse(species=paginated, total=total, page=page, limit=limit)
+        return SpeciesListResponse(
+            species=paginated,
+            total=total,
+            page=params.page,
+            limit=params.limit,
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

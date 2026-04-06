@@ -4,7 +4,7 @@ Feedback Pydantic Models
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class FeedbackType(str, Enum):
@@ -33,15 +33,15 @@ class FeedbackBase(BaseModel):
 
 class FeedbackCreateSchema(FeedbackBase):
     """Schema for submitting general feedback"""
-    class Config:
-        """Example Format"""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "feedback_type": "general",
                 "message": "Great app for identifying ants! I learned a lot about local species.",
                 "rating": 5,
             }
         }
+    )
 
 
 class FeedbackSchema(FeedbackBase):
@@ -52,9 +52,7 @@ class FeedbackSchema(FeedbackBase):
     created_at: datetime
     reviewed_at: Optional[datetime] = None
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AIFeedbackBase(BaseModel):
@@ -74,9 +72,8 @@ class AIFeedbackCreateSchema(AIFeedbackBase):
     Users confirm whether the prediction was correct and can add free-text notes.
     No species correction is required — incorrect predictions are flagged for review.
     """
-    class Config:
-        """Example Format"""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "original_prediction": "Paratrechina longicornis",
                 "confidence_was": 0.85,
@@ -85,6 +82,7 @@ class AIFeedbackCreateSchema(AIFeedbackBase):
                 "rating": 3,
             }
         }
+    )
 
 
 class AIFeedbackSchema(AIFeedbackBase):
@@ -94,9 +92,7 @@ class AIFeedbackSchema(AIFeedbackBase):
     status: FeedbackStatus = FeedbackStatus.PENDING
     created_at: datetime
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SpeciesCorrectionBase(BaseModel):
@@ -110,9 +106,8 @@ class SpeciesCorrectionBase(BaseModel):
 
 class SpeciesCorrectionCreateSchema(SpeciesCorrectionBase):
     """Schema for submitting species data correction"""
-    class Config:
-        """Example Format"""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "field_name": "habitat",
                 "current_value": "Tropical Forests",
@@ -121,6 +116,7 @@ class SpeciesCorrectionCreateSchema(SpeciesCorrectionBase):
                 "source": "Personal observation + iNaturalist records",
             }
         }
+    )
 
 
 class SpeciesCorrectionSchema(SpeciesCorrectionBase):
@@ -131,9 +127,7 @@ class SpeciesCorrectionSchema(SpeciesCorrectionBase):
     status: FeedbackStatus = FeedbackStatus.PENDING
     created_at: datetime
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FeedbackListResponse(BaseModel):

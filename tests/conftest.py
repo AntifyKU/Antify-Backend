@@ -7,19 +7,17 @@ from datetime import datetime, timezone
 from typing import Any, Generator
 from unittest.mock import MagicMock, patch
 
+from fastapi.testclient import TestClient
 import pytest
+from app.dependencies.auth import get_current_user
+from app.main import app as combined_asgi_app
+from tests.fake_firestore import InMemoryFirestore
 
 patch("firebase_admin.get_app", return_value=MagicMock()).start()
 patch("firebase_admin.storage.bucket", return_value=MagicMock()).start()
 patch("pyrebase.initialize_app", return_value=MagicMock()).start()
 patch("firebase_admin.firestore.client", return_value=MagicMock()).start()
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.dependencies.auth import get_current_user  # noqa: E402
-from app.main import app as combined_asgi_app  # noqa: E402
-
-from tests.fake_firestore import InMemoryFirestore  # noqa: E402
 
 # Socket.IO wraps FastAPI; overrides must target the inner application.
 fastapi_app = combined_asgi_app.other_asgi_app
@@ -71,6 +69,7 @@ def user_document(
     role: str = "user",
     **extra: Any,
 ) -> dict:
+    """Return a user document satisfying UserSchema for list/get responses."""
     return {
         "user_id": uid,
         "username": username,
@@ -86,13 +85,15 @@ def user_document(
     }
 
 
-@pytest.fixture
-def firestore_db() -> InMemoryFirestore:
+@pytest.fixture(name="firestore_db")
+def firestore_db_fixture() -> InMemoryFirestore:
+    """Return an in-memory Firestore database."""
     return InMemoryFirestore()
 
 
 @pytest.fixture
 def client(monkeypatch, firestore_db: InMemoryFirestore) -> Generator[TestClient, None, None]:
+    """Override the Firestore database for the API routes."""
     monkeypatch.setattr("app.api.user.db", firestore_db)
     monkeypatch.setattr("app.api.species.db", firestore_db)
     monkeypatch.setattr("app.api.collection.db", firestore_db)
@@ -106,8 +107,9 @@ def client(monkeypatch, firestore_db: InMemoryFirestore) -> Generator[TestClient
 
 
 @pytest.fixture
-def override_user_uid(client, firestore_db: InMemoryFirestore):
+def override_user_uid(request, firestore_db: InMemoryFirestore):
     """Register current user in Firestore and override get_current_user."""
+    request.getfixturevalue("client")
     uid = "user-1"
 
     def _user() -> dict:
@@ -119,15 +121,20 @@ def override_user_uid(client, firestore_db: InMemoryFirestore):
 
 
 @pytest.fixture
-def override_admin_uid(client, firestore_db: InMemoryFirestore):
+def override_admin_uid(request, firestore_db: InMemoryFirestore):
+    """Override the current user for the API routes."""
+    request.getfixturevalue("client")
     uid = "admin-1"
-    fastapi_app.dependency_overrides[get_current_user] = lambda: {"uid": uid, "email": "admin@example.com"}
+    fastapi_app.dependency_overrides[get_current_user] = (
+        lambda: {"uid": uid, "email": "admin@example.com"}
+    )
     firestore_db.collection("users").document(uid).set(user_document(uid=uid, role="admin"))
     return uid
 
 
 @pytest.fixture
 def fake_pyrebase_login(monkeypatch) -> MagicMock:
+    """Override the Firebase login for the API routes."""
     fb = MagicMock()
     fb.auth.return_value.sign_in_with_email_and_password.return_value = {
         "idToken": "id-token",

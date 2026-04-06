@@ -1,7 +1,7 @@
 """Users Model"""
 from typing import Optional, Dict
 from datetime import datetime
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 
 
 class SignUpSchema(BaseModel):
@@ -10,31 +10,31 @@ class SignUpSchema(BaseModel):
     email: EmailStr
     password: str
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
-        json_schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "username": "johndoe",
                 "email": "johndoe@example.com",
                 "password": "strongpassword123"
             }
         }
+    )
 
 class LoginSchema(BaseModel):
     """User login schema"""
     email: str
     password: str
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
-        json_schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "email": "johndoe",
                 "password": "strongpassword123"
             }
         }
+    )
 
 class UserSchema(BaseModel):
     """User schema"""
@@ -51,10 +51,9 @@ class UserSchema(BaseModel):
         "language": "english",
     }
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
-        json_schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "user_id": "uuid-string",
                 "username": "johndoe",
@@ -70,6 +69,7 @@ class UserSchema(BaseModel):
                 }
             }
         }
+    )
 
 class UpdateProfileSchema(BaseModel):
     """User profile update schema"""
@@ -77,41 +77,41 @@ class UpdateProfileSchema(BaseModel):
     profile_picture: Optional[str] = None
     preferences: Optional[dict] = None
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
-        json_schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "username": "john_doe_updated",
-                "profile_picture": "http://example.com/profile.jpg",
+                "profile_picture": "https://example.com/profile.jpg",
                 "preferences": {
                     "language": "spanish",
                 }
             }
         }
+    )
 
 class ChangeEmailSchema(BaseModel):
     """Change email schema"""
     new_email: EmailStr
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
-        json_schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "new_email": "newemail@example.com"
             }
         }
+    )
 
 class ChangePasswordSchema(BaseModel):
     """Change password schema"""
     new_password: str
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
-        json_schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "new_password": "newstrongpassword456"
             }
         }
+    )

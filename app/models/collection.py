@@ -3,7 +3,7 @@ Collection and Favorites Pydantic Models
 """
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # FOLDER SCHEMAS
@@ -16,16 +16,15 @@ class FolderBase(BaseModel):
 
 class FolderCreate(FolderBase):
     """Schema for creating a folder"""
-
-    class Config:
-        """Example Format"""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "name": "Garden Ants",
                 "color": "#22A45D",
                 "icon": "leaf"
             }
         }
+    )
 
 
 class FolderUpdate(BaseModel):
@@ -43,9 +42,7 @@ class FolderSchema(FolderBase):
     updated_at: datetime
     item_count: int = 0  # Computed: number of items in this folder
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FolderListResponse(BaseModel):
@@ -71,10 +68,8 @@ class CollectionItemBase(BaseModel):
 class CollectionItemCreate(CollectionItemBase):
     """Schema for adding to collection"""
     folder_ids: List[str] = Field(default=[], description="List of folder IDs to add this item to")
-
-    class Config:
-        """Example Format"""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "species_id": "2",
                 "notes": "Found in my backyard mango tree",
@@ -83,6 +78,7 @@ class CollectionItemCreate(CollectionItemBase):
                 "folder_ids": []
             }
         }
+    )
 
 
 class CollectionItemSchema(CollectionItemBase):
@@ -96,9 +92,7 @@ class CollectionItemSchema(CollectionItemBase):
     species_scientific_name: Optional[str] = None
     species_image: Optional[str] = None
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CollectionListResponse(BaseModel):

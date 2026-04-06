@@ -5,6 +5,7 @@ import uuid
 import io
 import traceback
 
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException
@@ -26,7 +27,7 @@ from app.models.user import (
 from app.dependencies.auth import get_current_user
 from app.firebase import firebase
 
-from pydantic import BaseModel
+# pylint: disable=duplicate-code
 
 # Public routes (no admin required)
 router = APIRouter()

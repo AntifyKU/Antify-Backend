@@ -7,15 +7,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from tests.conftest import species_document
+import app.api.identification as ident
 
 
 @pytest.fixture
-def stub_ai_client(monkeypatch):
-    import app.api.identification as ident
-
+def stubbed_ai_client(monkeypatch):
+    """Stub the AI client."""
     stub = MagicMock()
 
     async def classify_image(file, confidence_threshold=0.5, top_k=5):
+        _ = (confidence_threshold, top_k)
         await file.read()
         await file.seek(0)
         return {
@@ -47,6 +48,7 @@ def stub_ai_client(monkeypatch):
     )
 
     async def detect_ants(file, confidence_threshold=0.25, iou_threshold=0.45):
+        _ = (confidence_threshold, iou_threshold)
         await file.read()
         await file.seek(0)
         return {
@@ -70,19 +72,25 @@ def stub_ai_client(monkeypatch):
     return stub
 
 
-def test_identify_health(client, stub_ai_client):
+@pytest.mark.usefixtures("stubbed_ai_client")
+def test_identify_health(client):
+    """Test that the identify health endpoint is available."""
     r = client.get("/api/identify/health")
     assert r.status_code == 200
     assert r.json()["status"] == "healthy"
 
 
-def test_identify_models(client, stub_ai_client):
+@pytest.mark.usefixtures("stubbed_ai_client")
+def test_identify_models(client):
+    """Test that the identify models endpoint is available."""
     r = client.get("/api/identify/models")
     assert r.status_code == 200
     assert r.json()["models"]
 
 
-def test_identify_multipart(client, stub_ai_client):
+@pytest.mark.usefixtures("stubbed_ai_client")
+def test_identify_multipart(client):
+    """Test that the identify multipart endpoint is available."""
     files = {"file": ("a.jpg", b"\xff\xd8\xff", "image/jpeg")}
     r = client.post("/api/identify", files=files)
     assert r.status_code == 200
@@ -91,13 +99,17 @@ def test_identify_multipart(client, stub_ai_client):
     assert body["top_prediction"] == "Oecophylla smaragdina"
 
 
-def test_identify_rejects_non_image(client, stub_ai_client):
+@pytest.mark.usefixtures("stubbed_ai_client")
+def test_identify_rejects_non_image(client):
+    """Test that a non-image file is rejected."""
     files = {"file": ("x.txt", b"hi", "text/plain")}
     r = client.post("/api/identify", files=files)
     assert r.status_code == 400
 
 
-def test_identify_base64(client, stub_ai_client):
+@pytest.mark.usefixtures("stubbed_ai_client")
+def test_identify_base64(client):
+    """Test that the identify base64 endpoint is available."""
     r = client.post(
         "/api/identify/base64",
         json={
@@ -111,7 +123,9 @@ def test_identify_base64(client, stub_ai_client):
     assert r.json()["success"] is True
 
 
-def test_detect(client, stub_ai_client):
+@pytest.mark.usefixtures("stubbed_ai_client")
+def test_detect(client):
+    """Test that the identify detect endpoint is available."""
     files = {"file": ("a.jpg", b"\xff\xd8\xff", "image/jpeg")}
     r = client.post("/api/identify/detect", files=files)
     assert r.status_code == 200
@@ -119,7 +133,9 @@ def test_detect(client, stub_ai_client):
     assert body["num_detections"] >= 1
 
 
-def test_identify_species_details(client, stub_ai_client, firestore_db, monkeypatch):
+@pytest.mark.usefixtures("stubbed_ai_client")
+def test_identify_species_details(client, firestore_db, monkeypatch):
+    """Test that the identify species details endpoint is available."""
     sid, data = species_document(
         doc_id="s-weaver",
         name="Weaver",
@@ -140,10 +156,10 @@ def test_identify_species_details(client, stub_ai_client, firestore_db, monkeypa
     assert body.get("image_url")
 
 
-def test_identify_species_details_rejected_when_ai_fails(client, monkeypatch, firestore_db):
-    import app.api.identification as ident
+def test_identify_species_details_rejected_when_ai_fails(client, monkeypatch):
+    """Test that the identify species details endpoint is rejected when AI fails."""
 
-    async def reject(*a, **kw):
+    async def reject(*_args, **_kwargs):
         return {"success": False, "message": "Not an ant"}
 
     stub = MagicMock()

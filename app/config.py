@@ -9,7 +9,7 @@ import cloudinary
 load_dotenv()
 
 # Firebase Web Config for Pyrebase (client-side authentication)
-firebaseConfig = {
+FIREBASE_CONFIG = {
     "apiKey": os.getenv("FIREBASE_API_KEY", ""),
     "authDomain": os.getenv("FIREBASE_AUTH_DOMAIN", ""),
     "projectId": os.getenv("FIREBASE_PROJECT_ID", ""),

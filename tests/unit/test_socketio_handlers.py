@@ -11,6 +11,7 @@ from app import socketio_server
 
 @pytest.mark.asyncio
 async def test_message_empty_emits_error():
+    """Test that an empty message emits an error."""
     mock_sio = MagicMock()
     mock_sio.emit = AsyncMock()
 
@@ -25,6 +26,7 @@ async def test_message_empty_emits_error():
 
 @pytest.mark.asyncio
 async def test_message_with_image_missing_emits_error():
+    """Test that a missing image emits an error."""
     mock_sio = MagicMock()
     mock_sio.emit = AsyncMock()
 
@@ -37,6 +39,7 @@ async def test_message_with_image_missing_emits_error():
 
 @pytest.mark.asyncio
 async def test_get_suggestions_emits_faq():
+    """Test that the FAQ suggestions are emitted."""
     mock_sio = MagicMock()
     mock_sio.emit = AsyncMock()
 

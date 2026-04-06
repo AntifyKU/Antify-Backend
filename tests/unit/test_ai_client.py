@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
-
+import io
 import httpx
 import pytest
 from starlette.datastructures import UploadFile
@@ -13,6 +13,7 @@ from app.services.ai_client import AIServiceClient
 
 @pytest.mark.asyncio
 async def test_health_check_success():
+    """Test that the health check endpoint is successful."""
     client = AIServiceClient(base_url="http://ai.test")
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"status": "ok"}
@@ -27,6 +28,7 @@ async def test_health_check_success():
 
 @pytest.mark.asyncio
 async def test_health_check_request_error():
+    """Test that the health check endpoint is unavailable when there is a request error."""
     client = AIServiceClient(base_url="http://ai.test")
     with patch("httpx.AsyncClient") as ac:
         inst = ac.return_value.__aenter__.return_value
@@ -37,14 +39,14 @@ async def test_health_check_request_error():
 
 @pytest.mark.asyncio
 async def test_classify_image_posts_multipart():
+    """Test that the classify image endpoint posts multipart."""
     client = AIServiceClient(base_url="http://ai.test")
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"success": True}
     mock_resp.raise_for_status = MagicMock()
 
-    import io
-
-    uf = UploadFile(filename="a.jpg", file=io.BytesIO(b"bytes"), headers={"content-type": "image/jpeg"})
+    uf = UploadFile(filename="a.jpg", file=io.BytesIO(b"bytes"),
+                    headers={"content-type": "image/jpeg"})
 
     with patch("httpx.AsyncClient") as ac:
         inst = ac.return_value.__aenter__.return_value
@@ -58,6 +60,7 @@ async def test_classify_image_posts_multipart():
 
 @pytest.mark.asyncio
 async def test_get_available_models_empty_on_error():
+    """Test that the get available models endpoint returns an empty list when there is an error."""
     client = AIServiceClient(base_url="http://ai.test")
     with patch("httpx.AsyncClient") as ac:
         inst = ac.return_value.__aenter__.return_value

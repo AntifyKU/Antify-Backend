@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import socketio
 
 from app.api import user as user_router
-import socketio
 from app.api import species as species_router
 from app.api import collection as collection_router
 from app.api import identification as identify_router
