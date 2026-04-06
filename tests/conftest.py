@@ -9,8 +9,6 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 import pytest
-from app.dependencies.auth import get_current_user
-from app.main import app as combined_asgi_app
 from tests.fake_firestore import InMemoryFirestore
 
 patch("firebase_admin.get_app", return_value=MagicMock()).start()
@@ -18,6 +16,8 @@ patch("firebase_admin.storage.bucket", return_value=MagicMock()).start()
 patch("pyrebase.initialize_app", return_value=MagicMock()).start()
 patch("firebase_admin.firestore.client", return_value=MagicMock()).start()
 
+from app.dependencies.auth import get_current_user  # noqa: E402  # pylint: disable=wrong-import-position
+from app.main import app as combined_asgi_app  # noqa: E402  # pylint: disable=wrong-import-position
 
 # Socket.IO wraps FastAPI; overrides must target the inner application.
 fastapi_app = combined_asgi_app.other_asgi_app
