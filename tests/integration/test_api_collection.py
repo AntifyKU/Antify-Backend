@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.conftest import species_document
 
 
@@ -11,13 +13,17 @@ def _species(firestore_db, sid: str = "sp-col-1"):
     return doc_id
 
 
-def test_collection_empty(client, override_user_uid):
+@pytest.mark.usefixtures("override_user_uid")
+def test_collection_empty(client):
+    """Test that the collection is empty."""
     r = client.get("/api/users/me/collection")
     assert r.status_code == 200
     assert r.json()["total"] == 0
 
 
-def test_add_and_list_collection(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_add_and_list_collection(client, firestore_db):
+    """Test that a species can be added to the collection and listed."""
     sp = _species(firestore_db)
     r = client.post(
         "/api/users/me/collection",
@@ -41,7 +47,9 @@ def test_add_and_list_collection(client, override_user_uid, firestore_db):
     assert chk.json()["collection_id"] == item_id
 
 
-def test_add_duplicate_species_rejected(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_add_duplicate_species_rejected(client, firestore_db):
+    """Test that a duplicate species is rejected."""
     sp = _species(firestore_db, "sp-dup")
     body = {"species_id": sp, "folder_ids": []}
     assert client.post("/api/users/me/collection", json=body).status_code == 200
@@ -49,7 +57,9 @@ def test_add_duplicate_species_rejected(client, override_user_uid, firestore_db)
     assert r2.status_code == 400
 
 
-def test_add_unknown_species_404(client, override_user_uid):
+@pytest.mark.usefixtures("override_user_uid")
+def test_add_unknown_species_404(client):
+    """Test that an unknown species is rejected."""
     r = client.post(
         "/api/users/me/collection",
         json={"species_id": "nope", "folder_ids": []},
@@ -57,14 +67,18 @@ def test_add_unknown_species_404(client, override_user_uid):
     assert r.status_code == 404
 
 
-def test_remove_collection_item(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_remove_collection_item(client, firestore_db):
+    """Test that a collection item can be removed."""
     sp = _species(firestore_db, "sp-rm")
     item = client.post("/api/users/me/collection", json={"species_id": sp, "folder_ids": []}).json()
     r = client.delete(f"/api/users/me/collection/{item['id']}")
     assert r.status_code == 200
 
 
-def test_folders_crud(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_folders_crud(client, firestore_db):
+    """Test that folders can be created, duplicated, and linked to collection items."""
     sp = _species(firestore_db, "sp-f")
     f = client.post(
         "/api/users/me/folders",
@@ -97,7 +111,9 @@ def test_folders_crud(client, override_user_uid, firestore_db):
     assert out.status_code == 200
 
 
-def test_delete_folder_unlinks_items(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_delete_folder_unlinks_items(client, firestore_db):
+    """Test that deleting a folder unlinks items from it."""
     sp = _species(firestore_db, "sp-df")
     fid = client.post(
         "/api/users/me/folders",
@@ -114,14 +130,18 @@ def test_delete_folder_unlinks_items(client, override_user_uid, firestore_db):
     assert fid not in refreshed.get("folder_ids", [])
 
 
-def test_remove_item_from_folder_not_member(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_remove_item_from_folder_not_member(client, firestore_db):
+    """Test that removing an item from a folder that it is not a member of is rejected."""
     sp = _species(firestore_db, "sp-nf")
     item = client.post("/api/users/me/collection", json={"species_id": sp, "folder_ids": []}).json()
     r = client.delete(f"/api/users/me/collection/{item['id']}/folders/ghost-folder")
     assert r.status_code == 400
 
 
-def test_set_item_folders(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_set_item_folders(client, firestore_db):
+    """Test that the folders for a collection item can be set."""
     sp = _species(firestore_db, "sp-sf")
     f1 = client.post(
         "/api/users/me/folders",
@@ -131,7 +151,8 @@ def test_set_item_folders(client, override_user_uid, firestore_db):
         "/api/users/me/folders",
         json={"name": "B", "color": "#222", "icon": "folder"},
     ).json()["id"]
-    item = client.post("/api/users/me/collection", json={"species_id": sp, "folder_ids": [f1]}).json()
+    item = client.post("/api/users/me/collection",
+                       json={"species_id": sp, "folder_ids": [f1]}).json()
     r = client.put(
         f"/api/users/me/collection/{item['id']}/folders",
         json={"folder_ids": [f2]},

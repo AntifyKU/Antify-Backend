@@ -112,6 +112,10 @@ class ChatbotService:
             print(f"Error fetching RAG context: {e}")
             return ""
 
+    def get_relevant_ant_context(self, query: str) -> str:
+        """Public wrapper for retrieving species context for a query."""
+        return self._get_relevant_ant_context(query)
+
     async def get_response_stream(
         self,
         content: str,
@@ -174,10 +178,12 @@ If not an ant image, say so briefly."""
         async for chunk in openrouter_client.chat_with_image(
             text=enhanced_prompt,
             image_base64=image_base64,
-            mime_type=mime_type,
             system_prompt=final_system_prompt,
-            temperature=0.7,
-            max_tokens=512,
+            options={
+                "mime_type": mime_type,
+                "temperature": 0.7,
+                "max_tokens": 512,
+            },
         ):
             yield chunk
 

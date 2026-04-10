@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 import requests
+import pytest
 from firebase_admin import auth as firebase_auth
 
 from app.dependencies.auth import get_current_user
@@ -12,6 +13,7 @@ from tests.conftest import fastapi_app, user_document
 
 
 def test_signup_creates_user(client, firestore_db, monkeypatch):
+    """Test that a user can be created."""
     monkeypatch.setattr(
         "app.api.user.auth.create_user",
         lambda **kw: SimpleNamespace(uid="new-user-uid"),
@@ -33,6 +35,7 @@ def test_signup_creates_user(client, firestore_db, monkeypatch):
 
 
 def test_signup_duplicate_username(client, firestore_db, monkeypatch):
+    """Test that a duplicate username is rejected."""
     firestore_db.collection("users").document("u1").set(
         user_document(uid="u1", username="taken", email="a@example.com")
     )
@@ -49,7 +52,8 @@ def test_signup_duplicate_username(client, firestore_db, monkeypatch):
     assert "Username" in r.json()["detail"]
 
 
-def test_signup_email_already_exists(client, firestore_db, monkeypatch):
+def test_signup_email_already_exists(client, monkeypatch):
+    """Test that a duplicate email is rejected."""
     def boom(**kw):
         raise firebase_auth.EmailAlreadyExistsError("x", None, None)
 
@@ -62,7 +66,9 @@ def test_signup_email_already_exists(client, firestore_db, monkeypatch):
     assert "Email" in r.json()["detail"]
 
 
-def test_login_with_email(client, firestore_db, fake_pyrebase_login, monkeypatch):
+@pytest.mark.usefixtures("fake_pyrebase_login")
+def test_login_with_email(client, firestore_db, monkeypatch):
+    """Test that a user can be logged in with their email."""
     firestore_db.collection("users").document("uid-1").set(
         user_document(uid="uid-1", username="bob", email="bob@example.com")
     )
@@ -81,7 +87,9 @@ def test_login_with_email(client, firestore_db, fake_pyrebase_login, monkeypatch
     assert "id_token" in data
 
 
-def test_login_with_username_resolves_email(client, firestore_db, fake_pyrebase_login, monkeypatch):
+@pytest.mark.usefixtures("fake_pyrebase_login")
+def test_login_with_username_resolves_email(client, firestore_db, monkeypatch):
+    """Test that a user can be logged in with their username."""
     firestore_db.collection("users").document("uid-2").set(
         user_document(uid="uid-2", username="carol", email="carol@example.com")
     )
@@ -97,7 +105,9 @@ def test_login_with_username_resolves_email(client, firestore_db, fake_pyrebase_
     assert r.status_code == 200
 
 
-def test_login_unknown_username(client, firestore_db, fake_pyrebase_login):
+@pytest.mark.usefixtures("fake_pyrebase_login")
+def test_login_unknown_username(client):
+    """Test that a unknown username is rejected."""
     r = client.post(
         "/api/auth/login",
         json={"email": "nobody", "password": "pw"},
@@ -106,6 +116,7 @@ def test_login_unknown_username(client, firestore_db, fake_pyrebase_login):
 
 
 def test_login_bad_password(client, firestore_db, fake_pyrebase_login):
+    """Test that a bad password is rejected."""
     firestore_db.collection("users").document("uid-3").set(
         user_document(uid="uid-3", username="dave", email="dave@example.com")
     )
@@ -122,14 +133,19 @@ def test_login_bad_password(client, firestore_db, fake_pyrebase_login):
     assert r.status_code == 400
 
 
-def test_get_me(client, override_user_uid):
+@pytest.mark.usefixtures("override_user_uid")
+def test_get_me(client):
+    """Test that the current user can be retrieved."""
     r = client.get("/api/users/me")
     assert r.status_code == 200
     assert r.json()["username"] == "alice"
 
 
-def test_get_me_not_found(client, firestore_db):
-    fastapi_app.dependency_overrides[get_current_user] = lambda: {"uid": "ghost", "email": "g@x.com"}
+def test_get_me_not_found(client):
+    """Test that a non-existent user is rejected."""
+    fastapi_app.dependency_overrides[get_current_user] = (
+        lambda: {"uid": "ghost", "email": "g@x.com"}
+    )
     try:
         r = client.get("/api/users/me")
         assert r.status_code == 404
@@ -137,13 +153,17 @@ def test_get_me_not_found(client, firestore_db):
         fastapi_app.dependency_overrides.clear()
 
 
-def test_update_profile_no_op(client, override_user_uid):
+@pytest.mark.usefixtures("override_user_uid")
+def test_update_profile_no_op(client):
+    """Test that updating a profile with no changes is successful."""
     r = client.put("/api/users/me/profile", json={})
     assert r.status_code == 200
     assert "No changes" in r.json()["message"]
 
 
-def test_update_profile_username_conflict(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_update_profile_username_conflict(client, firestore_db):
+    """Test that updating a profile with a conflicting username is rejected."""
     firestore_db.collection("users").document("other").set(
         user_document(uid="other", username="takenname", email="o@example.com")
     )
@@ -151,7 +171,9 @@ def test_update_profile_username_conflict(client, override_user_uid, firestore_d
     assert r.status_code == 400
 
 
-def test_change_email(client, override_user_uid, firestore_db, monkeypatch):
+@pytest.mark.usefixtures("override_user_uid")
+def test_change_email(client, firestore_db, monkeypatch):
+    """Test that a user's email can be changed."""
     monkeypatch.setattr("app.api.user.auth.update_user", lambda uid, **kw: None)
     r = client.put("/api/users/me/email", json={"new_email": "newmail@example.com"})
     assert r.status_code == 200
@@ -159,26 +181,34 @@ def test_change_email(client, override_user_uid, firestore_db, monkeypatch):
     assert doc.to_dict()["email"] == "newmail@example.com"
 
 
-def test_change_password(client, override_user_uid, monkeypatch):
+@pytest.mark.usefixtures("override_user_uid")
+def test_change_password(client, monkeypatch):
+    """Test that a user's password can be changed."""
     monkeypatch.setattr("app.api.user.auth.update_user", lambda uid, **kw: None)
     r = client.put("/api/users/me/password", json={"new_password": "newpw123456"})
     assert r.status_code == 200
 
 
-def test_logout(client, override_user_uid, monkeypatch):
+@pytest.mark.usefixtures("override_user_uid")
+def test_logout(client, monkeypatch):
+    """Test that a user can be logged out."""
     monkeypatch.setattr("app.api.user.auth.revoke_refresh_tokens", lambda uid: None)
     r = client.post("/api/auth/logout")
     assert r.status_code == 200
 
 
-def test_delete_account(client, override_user_uid, firestore_db, monkeypatch):
+@pytest.mark.usefixtures("override_user_uid")
+def test_delete_account(client, firestore_db, monkeypatch):
+    """Test that a user can be deleted."""
     monkeypatch.setattr("app.api.user.auth.delete_user", lambda uid: None)
     r = client.delete("/api/users/me")
     assert r.status_code == 200
     assert not firestore_db.collection("users").document("user-1").get().exists
 
 
-def test_upload_profile_picture(client, override_user_uid, monkeypatch):
+@pytest.mark.usefixtures("override_user_uid")
+def test_upload_profile_picture(client, monkeypatch):
+    """Test that a profile picture can be uploaded."""
     monkeypatch.setattr(
         "app.api.user.cloudinary.uploader.upload",
         lambda *a, **k: {"secure_url": "https://res.cloudinary.com/x/image/upload/v1/a.jpg"},
@@ -189,19 +219,25 @@ def test_upload_profile_picture(client, override_user_uid, monkeypatch):
     assert "cloudinary.com" in r.json()["profile_picture_url"]
 
 
-def test_upload_profile_picture_rejects_non_image(client, override_user_uid):
+@pytest.mark.usefixtures("override_user_uid")
+def test_upload_profile_picture_rejects_non_image(client):
+    """Test that a non-image file is rejected."""
     files = {"file": ("x.txt", b"hello", "text/plain")}
     r = client.post("/api/users/me/profile-picture", files=files)
     assert r.status_code == 400
 
 
-def test_upload_profile_picture_rejects_large_file(client, override_user_uid):
+@pytest.mark.usefixtures("override_user_uid")
+def test_upload_profile_picture_rejects_large_file(client):
+    """Test that a large file is rejected."""
     files = {"file": ("big.jpg", b"x" * (5 * 1024 * 1024 + 1), "image/jpeg")}
     r = client.post("/api/users/me/profile-picture", files=files)
     assert r.status_code == 400
 
 
-def test_push_token_roundtrip(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_push_token_roundtrip(client):
+    """Test that a push token can be set, retrieved, and deleted."""
     r = client.post(
         "/api/users/me/push-token",
         json={"push_token": "tok", "platform": "ios", "device_id": "d1"},
@@ -214,18 +250,21 @@ def test_push_token_roundtrip(client, override_user_uid, firestore_db):
     assert d.status_code == 200
 
 
-def test_admin_list_users(client, override_admin_uid):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_list_users(client):
+    """Test that a admin can list users."""
     r = client.get("/api/users")
     assert r.status_code == 200
     assert "users" in r.json()
 
 
 def test_non_admin_cannot_list_users(client, firestore_db):
+    """Test that a non-admin cannot list users."""
     firestore_db.collection("users").document("plain").set(user_document(uid="plain", role="user"))
-    fastapi_app.dependency_overrides[get_current_user] = lambda: {"uid": "plain", "email": "p@x.com"}
+    fastapi_app.dependency_overrides[get_current_user] = lambda: {"uid": "plain",
+                                                                  "email": "p@x.com"}
     try:
         r = client.get("/api/users")
         assert r.status_code == 403
     finally:
         fastapi_app.dependency_overrides.clear()
-

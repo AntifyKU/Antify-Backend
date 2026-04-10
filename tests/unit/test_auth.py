@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
+from firebase_admin import auth as fa_auth
+from tests.conftest import user_document
 
 from app.dependencies.auth import (
     AUTHENTICATION_FAILED_DETAIL,
@@ -21,6 +23,7 @@ from app.dependencies.auth import (
 
 
 def test_verify_token_missing_bearer():
+    """Test that a missing bearer is rejected."""
     with pytest.raises(HTTPException) as exc:
         verify_token(authorization="Basic xxx")
     assert exc.value.status_code == 401
@@ -28,12 +31,14 @@ def test_verify_token_missing_bearer():
 
 
 def test_get_current_user_missing_bearer():
+    """Test that a missing bearer is rejected."""
     with pytest.raises(HTTPException) as exc:
         get_current_user(authorization="not-bearer")
     assert exc.value.status_code == 401
 
 
 def test_verify_firebase_token_success(monkeypatch):
+    """Test that a valid token is verified."""
     monkeypatch.setattr(
         "app.dependencies.auth.auth.verify_id_token",
         lambda token, clock_skew_seconds=0: {"uid": "u1", "email": "a@b.com"},
@@ -43,7 +48,7 @@ def test_verify_firebase_token_success(monkeypatch):
 
 
 def test_verify_firebase_token_expired(monkeypatch):
-    from firebase_admin import auth as fa_auth
+    """Test that a expired token is rejected."""
 
     monkeypatch.setattr(
         "app.dependencies.auth.auth.verify_id_token",
@@ -56,7 +61,7 @@ def test_verify_firebase_token_expired(monkeypatch):
 
 
 def test_verify_firebase_token_revoked(monkeypatch):
-    from firebase_admin import auth as fa_auth
+    """Test that a revoked token is rejected."""
 
     monkeypatch.setattr(
         "app.dependencies.auth.auth.verify_id_token",
@@ -68,7 +73,7 @@ def test_verify_firebase_token_revoked(monkeypatch):
 
 
 def test_verify_firebase_token_invalid(monkeypatch):
-    from firebase_admin import auth as fa_auth
+    """Test that a invalid token is rejected."""
 
     monkeypatch.setattr(
         "app.dependencies.auth.auth.verify_id_token",
@@ -80,6 +85,7 @@ def test_verify_firebase_token_invalid(monkeypatch):
 
 
 def test_verify_firebase_token_generic_error(monkeypatch):
+    """Test that a generic error is rejected."""
     monkeypatch.setattr(
         "app.dependencies.auth.auth.verify_id_token",
         MagicMock(side_effect=RuntimeError("boom")),
@@ -90,14 +96,17 @@ def test_verify_firebase_token_generic_error(monkeypatch):
 
 
 def test_get_optional_user_no_header():
+    """Test that a no header is rejected."""
     assert get_optional_user(authorization=None) is None
 
 
 def test_get_optional_user_invalid_header():
+    """Test that a invalid header is rejected."""
     assert get_optional_user(authorization="nope") is None
 
 
 def test_get_optional_user_invalid_token_swallowed(monkeypatch):
+    """Test that a invalid token is swallowed."""
     monkeypatch.setattr(
         "app.dependencies.auth._verify_firebase_token",
         MagicMock(side_effect=HTTPException(status_code=401, detail="x")),
@@ -106,6 +115,7 @@ def test_get_optional_user_invalid_token_swallowed(monkeypatch):
 
 
 def test_get_optional_user_valid(monkeypatch):
+    """Test that a valid token is verified."""
     monkeypatch.setattr(
         "app.dependencies.auth._verify_firebase_token",
         lambda t: {"uid": "u1"},
@@ -114,8 +124,7 @@ def test_get_optional_user_valid(monkeypatch):
 
 
 def test_require_admin_success(monkeypatch, firestore_db):
-    from tests.conftest import user_document
-
+    """Test that a user is verified as admin."""
     firestore_db.collection("users").document("adm").set(
         user_document(uid="adm", username="a", email="a@x.com", role="admin")
     )
@@ -125,6 +134,7 @@ def test_require_admin_success(monkeypatch, firestore_db):
 
 
 def test_require_admin_user_missing(monkeypatch, firestore_db):
+    """Test that a user not found is rejected."""
     monkeypatch.setattr("app.dependencies.auth.firestore.client", lambda: firestore_db)
     with pytest.raises(HTTPException) as exc:
         require_admin({"uid": "ghost", "email": "g@x.com"})
@@ -132,7 +142,7 @@ def test_require_admin_user_missing(monkeypatch, firestore_db):
 
 
 def test_require_admin_forbidden(monkeypatch, firestore_db):
-    from tests.conftest import user_document
+    """Test that a forbidden error is rejected."""
 
     firestore_db.collection("users").document("u").set(
         user_document(uid="u", username="u", email="u@x.com", role="user")
@@ -144,6 +154,7 @@ def test_require_admin_forbidden(monkeypatch, firestore_db):
 
 
 def test_require_admin_firestore_error(monkeypatch):
+    """Test that a firestore error is rejected."""
     def failing_client():
         raise RuntimeError("db down")
 

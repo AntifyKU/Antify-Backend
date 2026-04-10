@@ -2,6 +2,7 @@
 Feedback API Routes
 User feedback, AI improvement suggestions, and species corrections
 """
+# pylint: disable=duplicate-code
 from typing import Optional, Annotated
 from datetime import datetime, timezone
 import uuid

@@ -32,10 +32,8 @@ class SpeciesBase(BaseModel):
 
 class SpeciesCreateSchema(SpeciesBase):
     """Schema for creating a new species"""
-
-    class Config:
-        """Example Format"""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "name": "Weaver Ant",
                 "scientific_name": "Oecophylla smaragdina",
@@ -55,6 +53,7 @@ class SpeciesCreateSchema(SpeciesBase):
                 "image": "https://example.com/weaver-ant.jpg"
             }
         }
+    )
 
 
 class SpeciesUpdateSchema(BaseModel):
@@ -80,9 +79,7 @@ class SpeciesSchema(SpeciesBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
-    class Config:
-        """Example Format"""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SpeciesListResponse(BaseModel):

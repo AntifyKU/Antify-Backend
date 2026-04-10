@@ -21,4 +21,5 @@ from app.api.user import _extract_cloudinary_public_id
     ],
 )
 def test_extract_cloudinary_public_id(url, expected):
+    """Test that the Cloudinary public ID is extracted from a URL."""
     assert _extract_cloudinary_public_id(url) == expected

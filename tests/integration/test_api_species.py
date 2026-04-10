@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import pytest
 from app.dependencies.auth import get_current_user
 
 from tests.conftest import fastapi_app, species_document, user_document
 
 
 def _seed_two_species(firestore_db):
-    sid1, d1 = species_document(doc_id="s1", name="Weaver Ant", scientific_name="Oecophylla smaragdina")
+    """Seed the firestore database with two species."""
+    sid1, d1 = species_document(doc_id="s1", name="Weaver Ant",
+                                scientific_name="Oecophylla smaragdina")
     sid2, d2 = species_document(doc_id="s2", name="Fire Ant", scientific_name="Solenopsis geminata")
     d2["tags"] = ["stinging"]
     d2["colors"] = ["Red"]
@@ -19,7 +22,8 @@ def _seed_two_species(firestore_db):
     firestore_db.collection("species").document(sid2).set(d2)
 
 
-def test_list_species_empty(client, firestore_db):
+def test_list_species_empty(client):
+    """Test that the species list is empty."""
     r = client.get("/api/species")
     assert r.status_code == 200
     body = r.json()
@@ -28,6 +32,7 @@ def test_list_species_empty(client, firestore_db):
 
 
 def test_list_species_search_and_filters(client, firestore_db):
+    """Test that the species list can be searched and filtered."""
     _seed_two_species(firestore_db)
     r = client.get("/api/species", params={"search": "fire"})
     assert r.status_code == 200
@@ -50,6 +55,7 @@ def test_list_species_search_and_filters(client, firestore_db):
 
 
 def test_list_species_pagination(client, firestore_db):
+    """Test that the species list can be paginated."""
     sid, data = species_document(doc_id="sp1", name="A", scientific_name="A. a")
     firestore_db.collection("species").document(sid).set(data)
     r = client.get("/api/species", params={"page": 1, "limit": 1})
@@ -59,6 +65,7 @@ def test_list_species_pagination(client, firestore_db):
 
 
 def test_get_species(client, firestore_db):
+    """Test that a species can be retrieved."""
     sid, data = species_document(doc_id="sx", name="X", scientific_name="X. x")
     firestore_db.collection("species").document(sid).set(data)
     r = client.get(f"/api/species/{sid}")
@@ -66,12 +73,15 @@ def test_get_species(client, firestore_db):
     assert r.json()["id"] == sid
 
 
-def test_get_species_not_found(client, firestore_db):
+def test_get_species_not_found(client):
+    """Test that a non-existent species is rejected."""
     r = client.get("/api/species/missing")
     assert r.status_code == 404
 
 
-def test_admin_create_species(client, override_admin_uid):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_create_species(client):
+    """Test that a species can be created."""
     payload = {
         "name": "Test Ant",
         "scientific_name": "Testus antus",
@@ -93,7 +103,9 @@ def test_admin_create_species(client, override_admin_uid):
     assert "id" in body
 
 
-def test_admin_update_species(client, override_admin_uid, firestore_db):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_update_species(client, firestore_db):
+    """Test that a species can be updated."""
     sid, data = species_document(doc_id="su", name="Old", scientific_name="Oldius oldius")
     firestore_db.collection("species").document(sid).set(data)
     r = client.put(f"/api/species/{sid}", json={"name": "New"})
@@ -101,7 +113,9 @@ def test_admin_update_species(client, override_admin_uid, firestore_db):
     assert r.json()["name"] == "New"
 
 
-def test_admin_update_species_allows_extended_fields(client, override_admin_uid, firestore_db):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_update_species_allows_extended_fields(client, firestore_db):
+    """Test that a species can be updated with extended fields."""
     sid, data = species_document(doc_id="su2", name="Old2", scientific_name="Oldius secondus")
     firestore_db.collection("species").document(sid).set(data)
     payload = {
@@ -116,7 +130,9 @@ def test_admin_update_species_allows_extended_fields(client, override_admin_uid,
     assert r.json()["risk"]["medical_importance"] == "low"
 
 
-def test_admin_delete_species(client, override_admin_uid, firestore_db):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_delete_species(client, firestore_db):
+    """Test that a species can be deleted."""
     sid, data = species_document(doc_id="sd", name="D", scientific_name="D. d")
     firestore_db.collection("species").document(sid).set(data)
     r = client.delete(f"/api/species/{sid}")
@@ -125,7 +141,9 @@ def test_admin_delete_species(client, override_admin_uid, firestore_db):
 
 
 def test_non_admin_cannot_create_species(client, firestore_db):
-    firestore_db.collection("users").document("u").set(user_document(uid="u", username="u", email="u@e.com", role="user"))
+    """Test that a non-admin cannot create a species."""
+    firestore_db.collection("users").document("u").set(
+        user_document(uid="u", username="u", email="u@e.com", role="user"))
     fastapi_app.dependency_overrides[get_current_user] = lambda: {"uid": "u", "email": "u@e.com"}
     try:
         r = client.post(

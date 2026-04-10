@@ -4,6 +4,7 @@ from __future__ import annotations
 
 
 def test_root(client):
+    """Test that the root endpoint is available."""
     r = client.get("/")
     assert r.status_code == 200
     body = r.json()
@@ -12,12 +13,14 @@ def test_root(client):
 
 
 def test_health(client):
+    """Test that the health endpoint is available."""
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"status": "healthy"}
 
 
 def test_openapi_docs_available(client):
+    """Test that the OpenAPI docs are available."""
     r = client.get("/openapi.json")
     assert r.status_code == 200
     spec = r.json()

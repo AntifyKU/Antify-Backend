@@ -84,12 +84,15 @@ class OpenRouterClient:
         self,
         text: str,
         image_base64: str,
-        mime_type: str = "image/jpeg",
         system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        options: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """Stream chat with an image (vision model)"""
+        options = options or {}
+        mime_type = options.get("mime_type", "image/jpeg")
+        temperature = options.get("temperature", 0.7)
+        max_tokens = options.get("max_tokens", 1024)
+
         # Build image URL for OpenAI vision format
         image_url = f"data:{mime_type};base64,{image_base64}"
 

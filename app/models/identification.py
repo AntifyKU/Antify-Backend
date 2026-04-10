@@ -1,7 +1,7 @@
 """Identification Model"""
 from typing import Optional
 from typing import List
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class PredictionResult(BaseModel):
@@ -44,9 +44,8 @@ class Base64ImageRequest(BaseModel):
     confidence_threshold: float = 0.5
     top_k: int = 5
 
-    class Config:
-        """Example Format"""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "image_base64": "/9j/4AAQSkZJRgABAQAAAQABAAD...",
                 "mime_type": "image/jpeg",
@@ -54,3 +53,4 @@ class Base64ImageRequest(BaseModel):
                 "top_k": 5
             }
         }
+    )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from app.dependencies.auth import get_current_user
 
 from tests.conftest import fastapi_app, species_document, user_document
@@ -23,6 +24,7 @@ def _seed_feedback(firestore_db):
 
 
 def test_submit_feedback_anonymous(client):
+    """Test that feedback can be submitted anonymously."""
     r = client.post(
         "/api/feedback",
         json={
@@ -38,6 +40,7 @@ def test_submit_feedback_anonymous(client):
 
 
 def test_submit_feedback_with_optional_user(client, monkeypatch):
+    """Test that feedback can be submitted with an optional user."""
     fastapi_app.dependency_overrides.clear()
     monkeypatch.setattr(
         "app.api.feedback.get_optional_user",
@@ -56,6 +59,7 @@ def test_submit_feedback_with_optional_user(client, monkeypatch):
 
 
 def test_submit_feedback_validation_error(client):
+    """Test that feedback submission with validation errors is rejected."""
     r = client.post(
         "/api/feedback",
         json={"feedback_type": "general", "message": "short", "rating": 4},
@@ -64,6 +68,7 @@ def test_submit_feedback_validation_error(client):
 
 
 def test_submit_ai_feedback(client):
+    """Test that AI feedback can be submitted."""
     r = client.post(
         "/api/feedback/ai",
         json={
@@ -80,6 +85,7 @@ def test_submit_ai_feedback(client):
 
 
 def test_submit_ai_feedback_large_base64_is_trimmed(client):
+    """Test that a large base64 image is trimmed."""
     big_image = "a" * 120000
     r = client.post(
         "/api/feedback/ai",
@@ -98,6 +104,7 @@ def test_submit_ai_feedback_large_base64_is_trimmed(client):
 
 
 def test_submit_species_correction_requires_auth(client, firestore_db):
+    """Test that species correction submission requires authentication."""
     sid, data = species_document(doc_id="sp-fb", name="Test", scientific_name="Testus antus")
     firestore_db.collection("species").document(sid).set(data)
     r = client.post(
@@ -114,7 +121,9 @@ def test_submit_species_correction_requires_auth(client, firestore_db):
     assert r.status_code == 422
 
 
-def test_submit_species_correction_success(client, override_user_uid, firestore_db):
+@pytest.mark.usefixtures("override_user_uid")
+def test_submit_species_correction_success(client, firestore_db):
+    """Test that species correction submission is successful."""
     sid, data = species_document(doc_id="sp-fb2", name="Test2", scientific_name="Testus duo")
     firestore_db.collection("species").document(sid).set(data)
     r = client.post(
@@ -131,21 +140,27 @@ def test_submit_species_correction_success(client, override_user_uid, firestore_
     assert r.json()["status"] == "pending"
 
 
-def test_admin_list_feedback(client, override_admin_uid, firestore_db):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_list_feedback(client, firestore_db):
+    """Test that feedback can be listed."""
     _seed_feedback(firestore_db)
     r = client.get("/api/feedback")
     assert r.status_code == 200
     assert r.json()["total"] >= 1
 
 
-def test_admin_list_feedback_filter_status(client, override_admin_uid, firestore_db):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_list_feedback_filter_status(client, firestore_db):
+    """Test that feedback can be filtered by status."""
     _seed_feedback(firestore_db)
     r = client.get("/api/feedback", params={"status": "pending"})
     assert r.status_code == 200
     assert r.json()["total"] >= 1
 
 
-def test_admin_update_feedback_status(client, override_admin_uid, firestore_db):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_update_feedback_status(client, firestore_db):
+    """Test that feedback status can be updated."""
     _seed_feedback(firestore_db)
     r = client.put("/api/feedback/f1/status", params={"status": "reviewed"})
     assert r.status_code == 200
@@ -154,12 +169,16 @@ def test_admin_update_feedback_status(client, override_admin_uid, firestore_db):
     assert doc["reviewed_at"] is not None
 
 
-def test_admin_update_feedback_status_not_found(client, override_admin_uid):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_update_feedback_status_not_found(client):
+    """Test that updating feedback status for a non-existent feedback is rejected."""
     r = client.put("/api/feedback/missing/status", params={"status": "reviewed"})
     assert r.status_code == 404
 
 
-def test_admin_list_ai_feedback_strips_base64(client, override_admin_uid, firestore_db):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_list_ai_feedback_strips_base64(client, firestore_db):
+    """Test that AI feedback is stripped of base64 images."""
     firestore_db.collection("ai_feedback").document("a1").set(
         {
             "id": "a1",
@@ -177,7 +196,9 @@ def test_admin_list_ai_feedback_strips_base64(client, override_admin_uid, firest
     assert item["has_image"] is True
 
 
-def test_admin_list_species_corrections(client, override_admin_uid, firestore_db):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_list_species_corrections(client, firestore_db):
+    """Test that species corrections can be listed."""
     firestore_db.collection("species_corrections").document("c1").set(
         {
             "id": "c1",
@@ -196,7 +217,9 @@ def test_admin_list_species_corrections(client, override_admin_uid, firestore_db
     assert r.status_code == 404
 
 
-def test_admin_apply_species_correction(client, override_admin_uid, firestore_db):
+@pytest.mark.usefixtures("override_admin_uid")
+def test_admin_apply_species_correction(client, firestore_db):
+    """Test that a species correction can be applied."""
     sid, data = species_document(doc_id="sp-apply", name="Apply", scientific_name="Apply ant")
     firestore_db.collection("species").document(sid).set(data)
     firestore_db.collection("species_corrections").document("c2").set(
@@ -221,6 +244,7 @@ def test_admin_apply_species_correction(client, override_admin_uid, firestore_db
 
 
 def test_non_admin_cannot_access_feedback_admin_routes(client, firestore_db):
+    """Test that a non-admin cannot access feedback admin routes."""
     firestore_db.collection("users").document("u").set(
         user_document(uid="u", username="u", email="u@e.com", role="user")
     )

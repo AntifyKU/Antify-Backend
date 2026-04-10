@@ -1,7 +1,8 @@
 """Unit tests for helpers in app.api.identification."""
 
 from __future__ import annotations
-
+import io
+from datetime import datetime, timezone
 import pytest
 from fastapi import HTTPException
 from starlette.datastructures import UploadFile
@@ -16,6 +17,7 @@ from app.api.identification import (
 
 
 def test_build_predictions_top_predictions():
+    """Test that the predictions are built from top predictions."""
     raw = {
         "top_predictions": [
             {"rank": 1, "class_name": "A. a", "confidence": 0.9, "species_id": "s1"},
@@ -28,6 +30,7 @@ def test_build_predictions_top_predictions():
 
 
 def test_build_predictions_legacy_top5():
+    """Test that the predictions are built from legacy top5 predictions."""
     raw = {
         "top5_predictions": [
             {"species": "B. b", "confidence": 0.5},
@@ -38,7 +41,7 @@ def test_build_predictions_legacy_top5():
 
 
 def test_normalise_timestamps():
-    from datetime import datetime, timezone
+    """Test that the timestamps are normalised."""
 
     dt = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
     species = {"created_at": dt, "updated_at": dt, "name": "x"}
@@ -48,13 +51,15 @@ def test_normalise_timestamps():
 
 
 def test_ai_rejected():
+    """Test that the AI rejected response is built."""
     out = _ai_rejected({"message": "custom"})
     assert out["success"] is False
     assert out["message"] == "custom"
-    assert out["predictions"] == []
+    assert not out["predictions"]
 
 
 def test_to_classification_response():
+    """Test that the classification response is built."""
     raw = {
         "top_prediction": "Top",
         "top_confidence": 0.88,
@@ -68,8 +73,7 @@ def test_to_classification_response():
 
 
 def test_require_image_accepts_image():
-    import io
-
+    """Test that a image file is accepted."""
     uf = UploadFile(
         filename="a.jpg",
         file=io.BytesIO(b"x"),
@@ -79,8 +83,7 @@ def test_require_image_accepts_image():
 
 
 def test_require_image_rejects_non_image():
-    import io
-
+    """Test that a non-image file is rejected."""
     uf = UploadFile(
         filename="a.txt",
         file=io.BytesIO(b"x"),
